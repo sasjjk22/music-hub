@@ -324,7 +324,7 @@ export default {
             env.DB.prepare("SELECT id,title,category,sort_order FROM charts ORDER BY sort_order ASC").all(),
             env.DB.prepare("SELECT value FROM settings WHERE key='junk_words'").first(),
           ]);
-          return json({ stats: { songs: sCount?.c || 0, blocked: bCount?.c || 0, charts: cCount?.c || 0, lyrics: lCount?.c || 0 }, categories: cats.results || [], sources: srcs.results || [], charts: charts.results || [], junkWords: junk?.value || JUNK_WORDS.join(",") });
+          return json({ stats: { songs: sCount?.c || 0, blocked: bCount?.c || 0, charts: cCount?.c || 0, lyrics: lCount?.c || 0 }, categories: cats.results || [], sources: srcs.results || [], charts: charts.results || [], junkWords: junk?.value || JUNK_WORDS.join(",") , accessToken: env.ACCESS_TOKEN || ""});
         }
         if (path === "/api/admin/songs" && request.method === "GET") {
           const q = (url.searchParams.get("q") || "").trim(), cat = (url.searchParams.get("cat") || "").trim(), filter = url.searchParams.get("filter") || "all", sort = url.searchParams.get("sort") || "score", page = Math.max(1, Number(url.searchParams.get("page") || 1)), limit = 25, offset = (page - 1) * limit;
