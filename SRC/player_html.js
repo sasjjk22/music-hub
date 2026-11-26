@@ -148,8 +148,8 @@ if (new URLSearchParams(location.search).get("token")) localStorage.setItem("mh_
 
 var chartsCache = [], artistsCache = [], albumsCache = [], artistCat = "全部", chartCat = "全部", albumQuery = "华语经典";
 var viewSongs = [], playQueue = [], curIdx = -1, curSong = null, playMode = "loop", lrcRows = [], timerId = null;
-var candidates = [], curCandIdx = -1, playSeq = 0, autoWaitMeta = false, curTabName = "discover";
-var pageState = { type: "", query: "", page: 1, hasMore: false, artistAlbums: [], artistTab: "songs", artistName: "", artistTag: "" };
+var candidates = [], curCandIdx = -1, playSeq = 0, autoWaitMeta = false, curTabName = "discover", backTarget = "discover";
+var pageState = { type: "", query: "", page: 1, hasMore: false, artistAlbums: [], artistSongs: [], artistTab: "songs", artistName: "", artistTag: "" };
 var audio = document.getElementById("audio"); audio.volume = 0.9;
 var favs = JSON.parse(localStorage.getItem("mh_favs") || "[]");
 var GRADS = ["linear-gradient(135deg,#0284c7,#6366f1)","linear-gradient(135deg,#db2777,#f43f5e)","linear-gradient(135deg,#059669,#10b981)","linear-gradient(135deg,#d97706,#f59e0b)","linear-gradient(135deg,#7c3aed,#a855f7)"];
@@ -175,12 +175,11 @@ function setNav(id) { curTabName = id; toggleMobileStage(false); ["discover", "a
 
 function nav(tab) {
   setNav(tab);
-  if (tab === "queue") { renderSongList("当前播放队列", "共 " + playQueue.length + " 首", "", playQueue, false); return; }
-  if (tab === "fav") { renderSongList("我喜欢的音乐", "本地红心收藏 · " + favs.length + " 首", "", favs, false); return; }
+  if (tab === "queue") { backTarget = "discover"; renderSongList("当前播放队列", "共 " + playQueue.length + " 首", "", playQueue, false); return; }
+  if (tab === "fav") { backTarget = "discover"; renderSongList("我喜欢的音乐", "本地红心收藏 · " + favs.length + " 首", "", favs, false); return; }
   if (tab === "albums") { loadAlbumsPage(albumQuery); return; }
   if (chartsCache.length) { if (tab === "artists") renderArtists(); else renderDiscover(); return; }
 
-  // 优先秒开本地缓存的首页骨架，同时后台静默刷新最新榜单
   var cachedRaw = localStorage.getItem("mh_home_v1");
   if (cachedRaw) {
     try {
@@ -234,32 +233,40 @@ function renderArtists() {
 }
 
 function loadAlbumsPage(q) {
-  albumQuery = q; var aCats = ["华语经典", "粤语经典", "周杰伦", "张学友", "陈奕迅", "日本动漫", "欧美流行"];
+  albumQuery = q;
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">加载专辑墙...</div>';
   api("/api/albums?q=" + encodeURIComponent(q)).then(function(d) {
     albumsCache = d.albums || [];
-    var h = '<div class="sec-head"><div class="sec-title">精选专辑</div></div><div class="pills">';
-    for (var k = 0; k < aCats.length; k++) h += '<button class="pill' + (albumQuery === aCats[k] ? " active" : "") + '" onclick="loadAlbumsPage(\\'' + aCats[k] + '\\')">' + aCats[k] + '</button>';
-    h += '</div><div class="cards-grid">';
-    for (var i = 0; i < albumsCache.length; i++) {
-      var al = albumsCache[i];
-      h += '<div class="card" onclick="openAlbumObj(' + i + ',0)"><img loading="lazy" referrerpolicy="no-referrer" src="' + thumb(al.cover, 240) + '" /><div class="card-body"><div class="card-t">' + esc(al.title) + '</div><div class="card-s">' + esc(al.artist) + (al.publishTime ? " · " + al.publishTime.slice(0,4) : "") + '</div></div></div>';
-    }
-    document.getElementById("leftPane").innerHTML = h + '</div>';
+    renderAlbumsWall();
   });
+}
+
+function renderAlbumsWall() {
+  var aCats = ["华语经典", "粤语经典", "周杰伦", "张学友", "陈奕迅", "日本动漫", "欧美流行"];
+  var h = '<div class="sec-head"><div class="sec-title">精选专辑</div></div><div class="pills">';
+  for (var k = 0; k < aCats.length; k++) h += '<button class="pill' + (albumQuery === aCats[k] ? " active" : "") + '" onclick="loadAlbumsPage(\\'' + aCats[k] + '\\')">' + aCats[k] + '</button>';
+  h += '</div><div class="cards-grid">';
+  for (var i = 0; i < albumsCache.length; i++) {
+    var al = albumsCache[i];
+    h += '<div class="card" onclick="openAlbumObj(' + i + ',0)"><img loading="lazy" referrerpolicy="no-referrer" src="' + thumb(al.cover, 240) + '" /><div class="card-body"><div class="card-t">' + esc(al.title) + '</div><div class="card-s">' + esc(al.artist) + (al.publishTime ? " · " + al.publishTime.slice(0,4) : "") + '</div></div></div>';
+  }
+  document.getElementById("leftPane").innerHTML = h + '</div>';
 }
 
 function openArtistIdx(i) {
   var ar = artistsCache[i]; if (!ar) return;
-  curTabName = "detail";
-  pageState = { type: "artist", query: ar.name, page: 1, hasMore: false, artistAlbums: [], artistTab: "songs", artistName: ar.name, artistTag: ar.tag };
+  curTabName = "detail"; backTarget = "discover";
+  pageState = { type: "artist", query: ar.name, page: 1, hasMore: false, artistAlbums: [], artistSongs: [], artistTab: "songs", artistName: ar.name, artistTag: ar.tag };
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">检索 ' + esc(ar.name) + ' 单曲与专辑...</div>';
   api("/api/artist?name=" + encodeURIComponent(ar.name) + "&page=1").then(function(d) {
-    pageState.hasMore = Boolean(d.hasMore); pageState.artistAlbums = d.albums || []; viewSongs = d.songs || []; renderArtistDetail();
+    pageState.hasMore = Boolean(d.hasMore); pageState.artistAlbums = d.albums || [];
+    pageState.artistSongs = d.songs || []; viewSongs = pageState.artistSongs;
+    renderArtistDetail();
   });
 }
 
 function renderArtistDetail() {
+  viewSongs = pageState.artistSongs || [];
   var cov = thumb((viewSongs[0] && viewSongs[0].cover) || (pageState.artistAlbums[0] && pageState.artistAlbums[0].cover) || "", 240);
   var h = '<div class="list-head">' + (cov ? '<img class="list-cov" referrerpolicy="no-referrer" src="' + cov + '" />' : '<div class="list-cov">' + esc(pageState.artistName.slice(0, 1)) + '</div>') +
     '<div style="flex:1;min-width:160px;"><div style="font-size:20px;font-weight:800;">' + esc(pageState.artistName) + '</div>' +
@@ -267,7 +274,7 @@ function renderArtistDetail() {
     '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="playAll()">&#9654; 播放全部</button>' +
     '<button class="pill' + (pageState.artistTab === "songs" ? " active" : "") + '" onclick="pageState.artistTab=\\'songs\\';renderArtistDetail()">热门单曲</button>' +
     '<button class="pill' + (pageState.artistTab === "albums" ? " active" : "") + '" onclick="pageState.artistTab=\\'albums\\';renderArtistDetail()">专辑 (' + pageState.artistAlbums.length + ')</button>' +
-    '<button class="btn ghost" onclick="nav(\\'discover\\')">返回</button></div></div></div>';
+    '<button class="btn ghost" onclick="nav(\\'artists\\')">返回歌手</button></div></div></div>';
   if (pageState.artistTab === "albums") {
     h += '<div class="cards-grid">';
     for (var i = 0; i < pageState.artistAlbums.length; i++) {
@@ -282,15 +289,23 @@ function renderArtistDetail() {
 function openAlbumObj(i, fromArtist) {
   var al = fromArtist ? pageState.artistAlbums[i] : albumsCache[i]; if (!al) return;
   curTabName = "detail";
+  backTarget = fromArtist ? "artist" : "albums";
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">加载专辑《' + esc(al.title) + '》...</div>';
   api("/api/album?id=" + encodeURIComponent(al.id)).then(function(d) {
-    var info = d.album || al; pageState = { type: "album", query: al.id, page: 1, hasMore: false };
+    var info = d.album || al;
     renderSongList(info.title, (info.artist || al.artist) + " · 专辑曲目 " + (d.songs || []).length + " 首", info.cover || al.cover, d.songs || [], false);
   });
 }
+
+function goBack() {
+  if (backTarget === "artist" && pageState.artistName) { renderArtistDetail(); return; }
+  if (backTarget === "albums" && albumsCache.length) { setNav("albums"); renderAlbumsWall(); return; }
+  nav("discover");
+}
+
 function openChartIdx(i) {
   var c = chartsCache[i]; if (!c) return;
-  curTabName = "detail";
+  curTabName = "detail"; backTarget = "discover";
   pageState = { type: "chart", query: c.id, page: 1, hasMore: false };
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">加载榜单...</div>';
   api("/api/chart?id=" + encodeURIComponent(c.id)).then(function(d) {
@@ -299,7 +314,7 @@ function openChartIdx(i) {
 }
 function doSearch(page) {
   var q = document.getElementById("qInput").value.trim(); if (!q) return nav("discover");
-  setNav("discover"); curTabName = "detail";
+  setNav("discover"); curTabName = "detail"; backTarget = "discover";
   if (page === 1) { pageState = { type: "search", query: q, page: 1, hasMore: false }; viewSongs = []; document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">全网搜索中...</div>'; }
   api("/api/search?q=" + encodeURIComponent(q) + "&page=" + page).then(function(d) {
     pageState.page = page; pageState.hasMore = Boolean(d.hasMore);
@@ -313,8 +328,8 @@ function loadMore() {
   if (pageState.type === "artist") {
     api("/api/artist?name=" + encodeURIComponent(pageState.query) + "&page=" + nextP).then(function(d) {
       pageState.page = nextP; pageState.hasMore = Boolean(d.hasMore);
-      var seen = {}; viewSongs.forEach(function(s) { seen[s.norm_key] = 1; });
-      (d.songs || []).forEach(function(s) { if (!seen[s.norm_key]) { seen[s.norm_key] = 1; viewSongs.push(s); } });
+      var seen = {}; pageState.artistSongs.forEach(function(s) { seen[s.norm_key] = 1; });
+      (d.songs || []).forEach(function(s) { if (!seen[s.norm_key]) { seen[s.norm_key] = 1; pageState.artistSongs.push(s); } });
       renderArtistDetail();
     });
   }
@@ -322,8 +337,9 @@ function loadMore() {
 function renderSongList(title, sub, cover, songs, hasMore) {
   viewSongs = songs || [];
   var cov = thumb(cover, 240);
+  var backLabel = backTarget === "artist" ? ("← 返回 " + pageState.artistName) : backTarget === "albums" ? "← 返回专辑" : "返回发现";
   var h = '<div class="list-head">' + (cov ? '<img class="list-cov" referrerpolicy="no-referrer" src="' + cov + '" />' : '<div class="list-cov">' + esc(title.slice(0, 1)) + '</div>') +
-    '<div style="flex:1;min-width:160px;"><div style="font-size:19px;font-weight:800;">' + esc(title) + '</div><div style="font-size:12px;color:var(--muted);margin:4px 0 10px;">' + esc(sub) + '</div><div style="display:flex;gap:8px;"><button class="btn" onclick="playAll()">&#9654; 播放全部</button><button class="btn ghost" onclick="nav(\\'discover\\')">返回发现</button></div></div></div>';
+    '<div style="flex:1;min-width:160px;"><div style="font-size:19px;font-weight:800;">' + esc(title) + '</div><div style="font-size:12px;color:var(--muted);margin:4px 0 10px;">' + esc(sub) + '</div><div style="display:flex;gap:8px;"><button class="btn" onclick="playAll()">&#9654; 播放全部</button><button class="btn ghost" onclick="goBack()">' + esc(backLabel) + '</button></div></div></div>';
   document.getElementById("leftPane").innerHTML = h + buildSongsRowsHtml(viewSongs, hasMore);
 }
 function buildSongsRowsHtml(songs, hasMore) {
