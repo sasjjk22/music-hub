@@ -153,7 +153,9 @@ async function raceKuwoAll(song, ids, trace) {
       }
       if (ekey || !isBasicAudioUrl(u)) throw new Error("kw_invalid");
       if (dur > 0 && song.duration >= 90 && dur <= 65) throw new Error("kw_trial");
-      return { url: u, source: "kuwo", kuwoId: rid };
+      const real = await verifyNot30sTrial(u, song.duration);
+      if (!real) throw new Error("kw_trial_size");
+      return { url: real, source: "kuwo", kuwoId: rid };
     }));
   } catch {
     trace.push("kw:fail");
