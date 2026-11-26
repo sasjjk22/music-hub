@@ -54,12 +54,10 @@ function cleanLrcText(raw) {
   if (!raw) return "";
   return raw.split(/\r?\n/).filter((l) => !["作词 :", "作曲 :", "编曲 :", "制作人 :", "QQ音乐", "网易云"].some((k) => l.includes(k))).join("\n").trim();
 }
-
 function isBasicAudioUrl(u) {
   return Boolean(u && typeof u === "string" && u.startsWith("http") && !u.includes("panspace.kuwo.cn") && !u.includes("/404"));
 }
 
-// 仅用于网易云/Meting系防 30 秒试听截断（1.5 秒极速 HEAD）
 async function verifyNot30sTrial(url, durationSec) {
   if (!isBasicAudioUrl(url)) return null;
   try {
@@ -74,7 +72,7 @@ async function verifyNot30sTrial(url, durationSec) {
     }
     return res.url || url;
   } catch {
-    return null; // 无法确认完整大小时直接放弃，避免放出 30s 试听
+    return null;
   }
 }
 
@@ -113,7 +111,6 @@ async function liveSearchAlbums(query, limit = 24, page = 1) {
   } catch { return []; }
 }
 
-// ---------- 源 1：酷我最新 2026 多参数直连（不走冗余 HEAD，0.6~1.2s 出链） ----------
 async function searchKuwoRid(kw) {
   const sr = await fetchTimeout(
     `https://search.kuwo.cn/r.s?all=${encodeURIComponent(kw)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=5&rformat=json&encoding=utf8`,
@@ -163,7 +160,6 @@ async function raceKuwoAll(song, ids, trace) {
   }
 }
 
-// ---------- 源 2：GDStudio（?use_xbridge3=true，并发试探 joox / kuwo / netease） ----------
 async function raceGDStudio(song, ids, trace) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
@@ -198,7 +194,6 @@ async function raceGDStudio(song, ids, trace) {
   catch { trace.push("gd:fail"); throw new Error("gd_fail"); }
 }
 
-// ---------- 源 3：VKeys（同时试 QQ quality=3/2 和 网易云） ----------
 async function raceVKeys(song, ids, trace) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
@@ -222,7 +217,6 @@ async function raceVKeys(song, ids, trace) {
   catch { trace.push("vkeys:fail"); throw new Error("vkeys"); }
 }
 
-// ---------- 源 4：Meting（仅限非 VIP 免费歌，严防 30s） ----------
 async function raceMeting(baseUrl, tag, neteaseId, durationSec, trace) {
   if (!neteaseId) throw new Error("no_id");
   const r = await fetchTimeout(`${baseUrl}?server=netease&type=song&id=${neteaseId}`, { headers: { "User-Agent": UA } }, 2200);
@@ -249,11 +243,7 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
   if (prefer === "kuwo") {
     raceList.push(raceKuwoAll(song, ids, trace));
   } else {
-    raceList.push(
-      raceKuwoAll(song, ids, trace),
-      raceGDStudio(song, ids, trace),
-      raceVKeys(song, ids, trace)
-    );
+    raceList.push(raceKuwoAll(song, ids, trace), raceGDStudio(song, ids, trace), raceVKeys(song, ids, trace));
     if (skip !== "meting") {
       raceList.push(
         raceMeting("https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, trace),
@@ -326,7 +316,7 @@ export default {
             env.DB.prepare("SELECT id,title,category,sort_order FROM charts ORDER BY sort_order ASC").all(),
             env.DB.prepare("SELECT value FROM settings WHERE key='junk_words'").first(),
           ]);
-          return json({ stats: { songs: sCount?.c || 0, blocked: bCount?.c || 0, charts: cCount?.c || 0, lyrics: lCount?.c || 0 }, categories: cats.results || [], sources: srcs.results || [], charts: charts.results || [], junkWords: junk?.value || JUNK_WORDS.join(",") , accessToken: env.ACCESS_TOKEN || ""});
+          return json({ stats: { songs: sCount?.c || 0, blocked: bCount?.c || 0, charts: cCount?.c || 0, lyrics: lCount?.c || 0 }, categories: cats.results || [], sources: srcs.results || [], charts: charts.results || [], junkWords: junk?.value || JUNK_WORDS.join(","), accessToken: env.ACCESS_TOKEN || "" });
         }
         if (path === "/api/admin/songs" && request.method === "GET") {
           const q = (url.searchParams.get("q") || "").trim(), cat = (url.searchParams.get("cat") || "").trim(), filter = url.searchParams.get("filter") || "all", sort = url.searchParams.get("sort") || "score", page = Math.max(1, Number(url.searchParams.get("page") || 1)), limit = 25, offset = (page - 1) * limit;
@@ -451,7 +441,6 @@ export default {
 
       if (!checkToken(request, env)) return json({ error: "Unauthorized" }, 401);
 
-      // 一键全源体检接口（直接测试 CF 机房到各音乐源的真实连通率与耗时）
       if (path === "/api/diag") {
         const song = { title: "一路上有你", artist: "张学友", duration: 297, source_ids_json: '{"netease":"190449"}' };
         const tests = [
@@ -578,11 +567,146 @@ export default {
 
       if (path === "/api/mf-plugin.js") {
         const base = `${url.protocol}//${url.host}`;
-        return new Response(`"use strict";const axios=require("axios");const BASE="${base}";const TOKEN="${env.ACCESS_TOKEN||""}";const H=TOKEN?{"X-Access-Token":TOKEN}:{};module.exports={platform:"MusicHub·自建云端",author:"MusicHub",version:"1.4.2",cacheControl:"no-cache",supportedSearchType:["music"],async search(q,p,t){if(t!=="music")return{isEnd:true,data:[]};const{data}=await axios.get(BASE+"/api/search",{params:{q,page:p},headers:H,timeout:10000});return{isEnd:!data.hasMore,data:(data.songs||[]).map(s=>({id:String(s.id||0),title:s.title,artist:s.artist,album:s.album,artwork:s.cover,duration:s.duration,ext_source:s.ext_source||"",ext_id:s.ext_id||""}))};},async getMediaSource(item,q){const{data}=await axios.get(BASE+"/api/play",{params:{id:item.id||0,q:q||"high",ext_source:item.ext_source,ext_id:item.ext_id,title:item.title,artist:item.artist,album:item.album,cover:item.artwork,duration:item.duration},headers:H,timeout:14000});return{url:data.url,headers:data.headers};},async getLyric(item){const{data}=await axios.get(BASE+"/api/song",{params:{id:item.id||0,ext_source:item.ext_source,ext_id:item.ext_id,title:item.title,artist:item.artist},headers:H,timeout:8000});return{rawLrc:data.song?.lyric_lrc||"",translation:data.song?.lyric_trans||undefined};},async getTopLists(){const{data}=await axios.get(BASE+"/api/home",{headers:H,timeout:8000});const g={};for(const c of data.charts||[]){if(!g[c.category])g[c.category]=[];g[c.category].push({id:c.id,title:c.title,coverImg:c.cover,description:c.description});}return Object.entries(g).map(([title,data])=>({title,data}));},async getTopListDetail(tl){const{data}=await axios.get(BASE+"/api/chart",{params:{id:tl.id},headers:H,timeout:10000});return{isEnd:true,topListItem:tl,musicList:(data.songs||[]).map(s=>({id:String(s.id),title:s.title,artist:s.artist,album:s.album,artwork:s.cover,duration:s.duration}))};}};`, { headers: { "Content-Type": "application/javascript; charset=utf-8" } });
+        const pluginCode = `"use strict";
+const axios = require("axios");
+const BASE = "${base}";
+const TOKEN = "${env.ACCESS_TOKEN || ""}";
+const H = TOKEN ? { "X-Access-Token": TOKEN } : {};
+const UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
+
+function cleanTitle(t) {
+  return String(t || "").split("(")[0].split("（")[0].split("[")[0].split("【")[0].trim();
+}
+function mapSong(s) {
+  return { id: String(s.id || 0), title: s.title, artist: s.artist, album: s.album, artwork: s.cover, duration: s.duration, category: s.category || "", ext_source: s.ext_source || "", ext_id: s.ext_id || "" };
+}
+function raceFirst(tasks) {
+  return new Promise(function(resolve, reject) {
+    var left = tasks.length, done = false;
+    if (!left) return reject("empty");
+    tasks.forEach(function(p) {
+      p.then(function(v) { if (!done) { done = true; resolve(v); } })
+       .catch(function() { left--; if (left === 0 && !done) reject("all_failed"); });
+    });
+  });
+}
+
+module.exports = {
+  platform: "MusicHub·自建云端",
+  author: "MusicHub",
+  version: "1.5.0",
+  cacheControl: "no-cache",
+  supportedSearchType: ["music", "album"],
+
+  async search(query, page, type) {
+    if (type === "album") {
+      if (page > 1) return { isEnd: true, data: [] };
+      const { data } = await axios.get(BASE + "/api/albums", { params: { q: query }, headers: H, timeout: 10000 });
+      return { isEnd: true, data: (data.albums || []).map(function(a) { return { id: String(a.id), title: a.title, artist: a.artist, artwork: a.cover, date: a.publishTime }; }) };
+    }
+    if (type !== "music") return { isEnd: true, data: [] };
+    const { data } = await axios.get(BASE + "/api/search", { params: { q: query, page: page }, headers: H, timeout: 10000 });
+    return { isEnd: !data.hasMore, data: (data.songs || []).map(mapSong) };
+  },
+
+  async getAlbumInfo(albumItem) {
+    const { data } = await axios.get(BASE + "/api/album", { params: { id: albumItem.id }, headers: H, timeout: 10000 });
+    return { isEnd: true, albumItem: albumItem, musicList: (data.songs || []).map(mapSong) };
+  },
+
+  async getMediaSource(item, quality) {
+    var br = quality === "super" ? "999" : quality === "low" ? "128" : quality === "standard" ? "192" : "320";
+    var dur = Number(item.duration || 0);
+    var cleanArtist = String(item.artist || "").split(new RegExp("[,、&/]"))[0].trim();
+    var kw = (cleanTitle(item.title) + " " + cleanArtist).trim();
+    var hdrs = { "User-Agent": UA };
+
+    function isFullSize(sizeKb) {
+      if (!sizeKb || dur < 90) return true;
+      return Number(sizeKb) >= Math.max(1300, dur * 8);
+    }
+
+    function tryGD(plat) {
+      var pidP = (plat === "netease" && item.ext_source === "netease" && item.ext_id)
+        ? Promise.resolve(item.ext_id)
+        : axios.get("https://music-api.gdstudio.xyz/api.php", {
+            params: { use_xbridge3: "true", types: "search", source: plat, name: kw, count: 3, pages: 1 },
+            headers: hdrs, timeout: 4500
+          }).then(function(r) { return (Array.isArray(r.data) && r.data[0] && r.data[0].id) ? String(r.data[0].id) : ""; });
+
+      return pidP.then(function(pid) {
+        if (!pid) return Promise.reject("no_id");
+        return axios.get("https://music-api.gdstudio.xyz/api.php", {
+          params: { use_xbridge3: "true", types: "url", source: plat, id: pid, br: br },
+          headers: hdrs, timeout: 4500
+        });
+      }).then(function(r) {
+        var d = r.data;
+        if (!d || !d.url || d.url.indexOf("panspace") >= 0 || !isFullSize(d.size)) return Promise.reject("trial");
+        if (plat === "netease" && dur >= 90) {
+          return axios.head(d.url, { headers: hdrs, timeout: 2500 }).then(function(hr) {
+            var cl = Number((hr.headers && hr.headers["content-length"]) || 0);
+            if (cl > 0 && cl < Math.max(1300 * 1024, dur * 8 * 1024)) return Promise.reject("30s");
+            return { url: d.url };
+          }).catch(function(err) {
+            if (err === "30s") return Promise.reject("30s");
+            return { url: d.url };
+          });
+        }
+        return { url: d.url };
+      });
+    }
+
+    try {
+      if (String(item.artist || "").indexOf("塞壬") < 0) {
+        return await raceFirst([tryGD("kuwo"), tryGD("joox"), tryGD("netease")]);
+      }
+    } catch (e) {}
+
+    const { data } = await axios.get(BASE + "/api/play", {
+      params: { id: item.id || 0, q: quality || "high", ext_source: item.ext_source, ext_id: item.ext_id, title: item.title, artist: item.artist, album: item.album, cover: item.artwork, duration: item.duration },
+      headers: H, timeout: 12000
+    });
+    return { url: data.url, headers: data.headers };
+  },
+
+  async getLyric(item) {
+    const { data } = await axios.get(BASE + "/api/song", {
+      params: { id: item.id || 0, ext_source: item.ext_source, ext_id: item.ext_id, title: item.title, artist: item.artist },
+      headers: H, timeout: 8000
+    });
+    return { rawLrc: (data.song && data.song.lyric_lrc) || "", translation: (data.song && data.song.lyric_trans) || undefined };
+  },
+
+  async getTopLists() {
+    const { data } = await axios.get(BASE + "/api/home", { headers: H, timeout: 8000 });
+    var g = {};
+    for (var i = 0; i < (data.charts || []).length; i++) {
+      var c = data.charts[i];
+      if (!g[c.category]) g[c.category] = [];
+      g[c.category].push({ id: c.id, title: c.title, coverImg: c.cover, description: c.description });
+    }
+    var out = Object.keys(g).map(function(title) { return { title: title, data: g[title] }; });
+    if (data.artists && data.artists.length) {
+      out.push({ title: "热门歌手代表作", data: data.artists.map(function(a) { return { id: "artist_" + a.name, title: a.name, description: a.tag }; }) });
+    }
+    return out;
+  },
+
+  async getTopListDetail(tl) {
+    if (String(tl.id).indexOf("artist_") === 0) {
+      const { data } = await axios.get(BASE + "/api/artist", { params: { name: String(tl.id).slice(7), page: 1 }, headers: H, timeout: 10000 });
+      return { isEnd: !data.hasMore, topListItem: tl, musicList: (data.songs || []).map(mapSong) };
+    }
+    const { data } = await axios.get(BASE + "/api/chart", { params: { id: tl.id }, headers: H, timeout: 10000 });
+    return { isEnd: true, topListItem: tl, musicList: (data.songs || []).map(mapSong) };
+  }
+};`;
+        return new Response(pluginCode, { headers: { "Content-Type": "application/javascript; charset=utf-8" } });
       }
       if (path === "/musicfree.json") {
         const qs = env.ACCESS_TOKEN ? `?token=${encodeURIComponent(env.ACCESS_TOKEN)}` : "";
-        return json({ plugins: [{ name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/api/mf-plugin.js${qs}`, version: "1.4.2" }] });
+        return json({ plugins: [{ name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/api/mf-plugin.js${qs}`, version: "1.5.0" }] });
       }
       return json({ error: "Not Found" }, 404);
     } catch (err) {
