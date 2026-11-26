@@ -4,6 +4,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Music Hub 管理后台</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
   :root{--bg:#090c14;--card:#0f1420;--line:rgba(255,255,255,.08);--acc:#38bdf8;--muted:#94a3b8;}
   *{box-sizing:border-box;}
@@ -15,9 +16,12 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:16px;}
   h2,h3{margin:0 0 12px;font-size:17px;}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;}
+  .sub-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
+  .sub-card{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;gap:14px;align-items:center;}
+  .qr-box{width:112px;height:112px;background:#fff;border-radius:10px;padding:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .qr-box svg,.qr-box img{width:100% !important;height:100% !important;display:block;}
   .stat{background:rgba(255,255,255,.04);padding:14px;border-radius:12px;text-align:center;}
-  .stat b{font-size:24px;color:var(--acc);display:block;}
-  .stat span{font-size:12px;color:var(--muted);}
+  .stat b{font-size:24px;color:var(--acc);display:block;} .stat span{font-size:12px;color:var(--muted);}
   input,select,textarea{background:#090c14;border:1px solid #334155;color:#fff;padding:8px 10px;border-radius:8px;font-size:13px;outline:none;}
   textarea{width:100%;font-family:monospace;line-height:1.5;}
   button{background:var(--acc);color:#06121f;border:none;padding:8px 14px;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;}
@@ -32,8 +36,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:50;display:none;align-items:center;justify-content:center;padding:16px;}
   .modal-bg.open{display:flex;}
   .modal{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;width:100%;max-width:640px;max-height:90vh;overflow-y:auto;}
-  .pbar{height:8px;background:#1e293b;border-radius:99px;overflow:hidden;margin:10px 0;}
-  .pbar > div{height:100%;background:linear-gradient(90deg,#38bdf8,#10b981);transition:width .3s;}
+  .pbar{height:8px;background:#1e293b;border-radius:99px;overflow:hidden;margin:10px 0;} .pbar > div{height:100%;background:linear-gradient(90deg,#38bdf8,#10b981);transition:width .3s;}
   .aud-bar{position:fixed;left:0;right:0;bottom:0;background:#0f172a;border-top:1px solid var(--line);padding:10px 20px;display:none;align-items:center;gap:12px;z-index:40;}
 </style>
 </head>
@@ -48,6 +51,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
 
 <div class="tabs" id="tabBar" style="display:none;">
   <button class="tab active" id="t-overview" onclick="switchTab('overview')">概览与音源池</button>
+  <button class="tab" id="t-subs" onclick="switchTab('subs')">订阅与二维码</button>
   <button class="tab" id="t-songs" onclick="switchTab('songs')">曲库管理</button>
   <button class="tab" id="t-lyrics" onclick="switchTab('lyrics')">歌词库管理</button>
   <button class="tab" id="t-charts" onclick="switchTab('charts')">榜单管理</button>
@@ -96,8 +100,12 @@ function doLogin() {
 function logout() { sessionStorage.removeItem("mh_admin_tk"); ATOKEN = ""; renderLogin(""); }
 function switchTab(t) {
   curTab = t;
-  ["overview", "songs", "lyrics", "charts"].forEach(function(k) { var el = document.getElementById("t-" + k); if (el) el.classList.toggle("active", k === t); });
-  if (t === "overview") renderOverview(); else if (t === "songs") renderSongsTab(); else if (t === "lyrics") renderLyricsTab(); else if (t === "charts") renderChartsTab();
+  ["overview", "subs", "songs", "lyrics", "charts"].forEach(function(k) { var el = document.getElementById("t-" + k); if (el) el.classList.toggle("active", k === t); });
+  if (t === "overview") renderOverview();
+  else if (t === "subs") renderSubsTab();
+  else if (t === "songs") renderSongsTab();
+  else if (t === "lyrics") renderLyricsTab();
+  else if (t === "charts") renderChartsTab();
 }
 function loadAll() {
   if (!ATOKEN) { renderLogin(""); return; }
@@ -106,11 +114,64 @@ function loadAll() {
   }).catch(function(){});
 }
 
+// -------- 订阅源与二维码 Tab --------
+function makeQrHtml(text) {
+  try {
+    if (typeof qrcode === "function") {
+      var q = qrcode(0, "M");
+      q.addData(text);
+      q.make();
+      return q.createSvgTag(4, 0);
+    }
+  } catch {}
+  return '<img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' + encodeURIComponent(text) + '" />';
+}
+
+function copyText(id, btn) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  navigator.clipboard.writeText(el.value).then(function() {
+    var old = btn.textContent; btn.textContent = "已复制 ✓";
+    setTimeout(function() { btn.textContent = old; }, 1500);
+  }).catch(function() { el.select(); document.execCommand("copy"); });
+}
+
+function renderSubsTab() {
+  var base = location.origin;
+  var tk = dashData.accessToken || "";
+  var qs = tk ? ("?token=" + encodeURIComponent(tk)) : "";
+  var items = [
+    { id: "sub_player", title: "📱 PWA 手机 / 网页播放器", desc: "手机扫码直接听歌，Safari 可添加到桌面当独立 App", url: base + "/player" + qs },
+    { id: "sub_mfjson", title: "🧩 MusicFree 网络订阅源 (JSON)", desc: "MusicFree -> 插件管理 -> 从网络安装（推荐）", url: base + "/musicfree.json" + qs },
+    { id: "sub_mfjs", title: "📄 MusicFree 单插件 JS 直链", desc: "适合直接导入单个插件脚本", url: base + "/api/mf-plugin.js" + qs },
+    { id: "sub_diag", title: "🩺 全源并发体检接口", desc: "实时查看服务器到各大音源的连通率与耗时", url: base + "/api/diag" + qs },
+  ];
+
+  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' +
+    '<div><h3>客户端订阅地址 & 二维码</h3><p style="font-size:12px;color:var(--muted);">当前访问密钥 (ACCESS_TOKEN)：' + (tk ? '<span class="badge ok">已自动拼接</span>' : '<span class="badge miss">未配置（免密模式）</span>') + '</p></div>' +
+    '</div><div class="sub-grid">';
+
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    h += '<div class="sub-card"><div class="qr-box">' + makeQrHtml(it.url) + '</div>' +
+      '<div style="flex:1;min-width:0;">' +
+      '<div style="font-weight:700;font-size:14px;margin-bottom:3px;">' + it.title + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">' + it.desc + '</div>' +
+      '<input id="' + it.id + '" value="' + esc(it.url) + '" readonly style="width:100%;font-size:12px;margin-bottom:8px;" onclick="this.select()" />' +
+      '<div style="display:flex;gap:6px;"><button class="sm" onclick="copyText(\\'' + it.id + '\\',this)">复制链接</button>' +
+      '<button class="sm ghost" onclick="window.open(\\'' + esc(it.url) + '\\',\\'_blank\\')">打开测试</button></div></div></div>';
+  }
+  h += '</div></div>';
+  document.getElementById("main").innerHTML = h;
+}
+
 function renderOverview() {
   var st = dashData.stats || {}, pct = st.songs ? Math.round((st.lyrics / st.songs) * 100) : 0;
-  var h = '<div class="card"><div class="grid"><div class="stat"><b>' + (st.songs||0) + '</b><span>可用歌曲</span></div><div class="stat"><b>' + (st.charts||0) + '</b><span>精选榜单</span></div><div class="stat"><b>' + (st.lyrics||0) + ' (' + pct + '%)</b><span>歌词覆盖率</span></div><div class="stat"><b>' + (st.blocked||0) + '</b><span>已屏蔽</span></div></div><div style="margin-top:14px;">' + (dashData.categories || []).map(function(c) { return '<span class="badge">' + esc(c.category) + ': ' + c.c + '首</span>'; }).join("") + '</div></div>';
+  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><h3>曲库概览</h3><button class="sm green" onclick="switchTab(\\'subs\\')">查看订阅源 & 二维码</button></div>' +
+    '<div class="grid"><div class="stat"><b>' + (st.songs||0) + '</b><span>可用歌曲</span></div><div class="stat"><b>' + (st.charts||0) + '</b><span>精选榜单</span></div><div class="stat"><b>' + (st.lyrics||0) + ' (' + pct + '%)</b><span>歌词覆盖率</span></div><div class="stat"><b>' + (st.blocked||0) + '</b><span>已屏蔽</span></div></div><div style="margin-top:14px;">' + (dashData.categories || []).map(function(c) { return '<span class="badge">' + esc(c.category) + ': ' + c.c + '首</span>'; }).join("") + '</div></div>';
+
   var srcs = dashData.sources || [];
-  h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><h3>音源解析池</h3><button class="sm" onclick="testAllSrc()">一键全员测活</button></div><table><tr><th>ID</th><th>名称 / 地址</th><th>类型</th><th>优先级</th><th>状态</th><th>测活结果</th><th>操作</th></tr>';
+  h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><h3>云端音源解析池</h3><button class="sm" onclick="testAllSrc()">一键全员测活</button></div><table><tr><th>ID</th><th>名称 / 地址</th><th>类型</th><th>优先级</th><th>状态</th><th>测活结果</th><th>操作</th></tr>';
   for (var i = 0; i < srcs.length; i++) {
     var s = srcs[i];
     h += '<tr><td>' + esc(s.id) + '</td><td>' + esc(s.name) + '<br><small style="color:var(--muted);">' + esc(s.endpoint) + '</small></td><td>' + esc(s.type) + '</td><td>' + s.priority + '</td><td>' + (s.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge">停用</span>') + '</td><td id="st-' + esc(s.id) + '"><small style="color:var(--muted);">未测</small></td><td><button class="sm" onclick="testSrc(' + i + ')">测活</button> <button class="sm ghost" onclick="editSrcForm(' + i + ')">改</button> <button class="sm ghost" onclick="toggleSrc(' + i + ')">' + (s.enabled ? "停" : "启") + '</button> <button class="sm red" onclick="delSrc(' + i + ')">删</button></td></tr>';
