@@ -12,7 +12,6 @@ export const PLAYER_HTML = `<!DOCTYPE html>
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
   html,body{height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif;overflow:hidden;}
   ::-webkit-scrollbar{width:5px;height:5px;} ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:3px;}
-
   .app-shell{display:flex;flex-direction:column;height:100vh;}
   .topbar{height:58px;flex-shrink:0;background:rgba(10,14,24,.9);backdrop-filter:blur(20px);border-bottom:1px solid var(--line);padding:0 18px;display:flex;align-items:center;gap:12px;z-index:20;}
   .brand{font-size:17px;font-weight:800;display:flex;align-items:center;gap:8px;cursor:pointer;white-space:nowrap;}
@@ -24,19 +23,16 @@ export const PLAYER_HTML = `<!DOCTYPE html>
   .search-wrap input{width:100%;background:rgba(255,255,255,.07);border:1px solid var(--line);color:#fff;padding:7px 14px;border-radius:999px;font-size:13px;outline:none;}
   .btn{background:var(--acc);color:#06121f;border:none;padding:7px 14px;border-radius:999px;font-weight:600;font-size:12px;cursor:pointer;white-space:nowrap;}
   .btn.ghost{background:rgba(255,255,255,.08);color:var(--text);}
-
   .workspace{flex:1;min-height:0;display:grid;grid-template-columns:1.28fr .95fr;overflow:hidden;}
   .left-pane{overflow-y:auto;padding:16px 20px 28px;border-right:1px solid var(--line);}
   .right-stage{position:relative;overflow:hidden;display:flex;flex-direction:column;padding:20px 24px;background:#090d18;}
   .stage-blur{position:absolute;inset:-50px;background-size:cover;background-position:center;filter:blur(65px) brightness(.32) saturate(1.4);transform:scale(1.1);z-index:0;}
   .stage-inner{position:relative;z-index:1;display:flex;flex-direction:column;height:100%;min-height:0;}
-
   .sec-head{display:flex;justify-content:space-between;align-items:center;margin:4px 0 12px;gap:8px;flex-wrap:wrap;}
   .sec-title{font-size:17px;font-weight:700;}
   .pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
   .pill{padding:5px 12px;border-radius:999px;font-size:12px;background:var(--panel);color:var(--muted);border:1px solid var(--line);cursor:pointer;white-space:nowrap;}
   .pill.active{background:#fff;color:#070a11;border-color:#fff;font-weight:600;}
-
   .cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;margin-bottom:20px;}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;cursor:pointer;transition:.15s;}
   .card:hover{background:var(--hover);transform:translateY(-2px);}
@@ -46,10 +42,8 @@ export const PLAYER_HTML = `<!DOCTYPE html>
   .ar-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 6px;text-align:center;cursor:pointer;}
   .ar-card:hover{background:var(--hover);}
   .ar-ava{width:46px;height:46px;border-radius:50%;margin:0 auto 6px;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:#fff;}
-
   .list-head{display:flex;align-items:center;gap:14px;padding:14px;border-radius:16px;background:var(--panel);border:1px solid var(--line);margin-bottom:12px;flex-wrap:wrap;}
   .list-cov{width:74px;height:74px;border-radius:12px;object-fit:cover;background:#161e2e;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;}
-
   .s-row{display:grid;grid-template-columns:28px 40px 1fr 48px 56px;align-items:center;gap:10px;padding:7px 10px;border-radius:10px;cursor:pointer;}
   .s-row:hover{background:var(--hover);} .s-row.active{background:rgba(56,189,248,.14);}
   .s-num{font-size:12px;color:var(--muted);text-align:center;} .s-row.active .s-num{color:var(--acc);font-weight:700;}
@@ -58,38 +52,29 @@ export const PLAYER_HTML = `<!DOCTYPE html>
   .s-a{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
   .s-d{font-size:11px;color:var(--muted);text-align:right;}
   .ico-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:4px 5px;border-radius:6px;} .ico-btn:hover{color:#fff;} .ico-btn.loved{color:var(--pink);}
-
   .stage-top-card{display:flex;align-items:center;gap:14px;margin-bottom:12px;flex-shrink:0;}
   .stage-cov{width:104px;height:104px;border-radius:16px;object-fit:cover;background:#161e2e;box-shadow:0 14px 34px rgba(0,0,0,.55);flex-shrink:0;}
-  .stage-meta{min-width:0;flex:1;}
-  .stage-title{font-size:19px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .stage-meta{min-width:0;flex:1;} .stage-title{font-size:19px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .stage-artist{font-size:13px;color:#cbd5e1;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-
-  /* 明牌多源选择器 */
   .src-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:12px;flex-shrink:0;align-items:center;}
   .src-item{font-size:11px;padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--muted);cursor:pointer;}
-  .src-item.ok{color:var(--ok);border-color:rgba(52,211,153,.35);}
-  .src-item.cur{background:var(--acc);color:#070a11;border-color:var(--acc);font-weight:700;}
-  .src-item.warn{color:var(--warn);border-color:rgba(251,191,36,.3);}
-
+  .src-item.ok{color:var(--ok);border-color:rgba(52,211,153,.35);} .src-item.cur{background:var(--acc);color:#070a11;border-color:var(--acc);font-weight:700;} .src-item.warn{color:var(--warn);border-color:rgba(251,191,36,.3);}
   .lrc-scroll{flex:1;min-height:0;overflow-y:auto;padding:16vh 4px;scroll-behavior:smooth;-webkit-mask-image:linear-gradient(transparent,black 15%,black 85%,transparent);}
   .lrc-row{padding:8px 10px;font-size:15px;font-weight:600;color:rgba(255,255,255,.42);cursor:pointer;border-radius:8px;transition:.2s;line-height:1.45;}
   .lrc-row:hover{color:rgba(255,255,255,.8);} .lrc-row.cur{color:#fff;font-size:19px;font-weight:700;} .lrc-row small{display:block;font-size:12px;font-weight:400;margin-top:2px;opacity:.75;}
-
   .dock{height:76px;flex-shrink:0;background:rgba(10,14,24,.94);backdrop-filter:blur(24px);border-top:1px solid var(--line);padding:0 20px;display:grid;grid-template-columns:1fr 1.6fr 1fr;align-items:center;gap:14px;z-index:30;}
   .dock-l{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;}
-  .dock-m{display:flex;flex-direction:column;align-items:center;gap:4px;}
-  .ctrls{display:flex;align-items:center;gap:14px;}
+  .dock-m{display:flex;flex-direction:column;align-items:center;gap:4px;} .ctrls{display:flex;align-items:center;gap:14px;}
   .play-fab{width:34px;height:34px;border-radius:50%;background:#fff;color:#070a11;border:none;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;}
   .prog{width:100%;max-width:460px;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);} .prog input{flex:1;height:4px;accent-color:var(--acc);cursor:pointer;}
   .dock-r{display:flex;align-items:center;justify-content:flex-end;gap:10px;} .vol{width:76px;height:4px;accent-color:#cbd5e1;}
   .auth-wrap{max-width:360px;margin:12vh auto;background:var(--panel);border:1px solid var(--line);padding:24px;border-radius:16px;text-align:center;}
   .auth-wrap input{width:100%;background:rgba(255,255,255,.06);border:1px solid var(--line);color:#fff;padding:10px;border-radius:10px;margin:12px 0;outline:none;}
-
   .m-only{display:none;}
   @media(max-width:860px){
     .workspace{grid-template-columns:1fr;} .left-pane.hide-m{display:none;} .right-stage{display:none;} .right-stage.show-m{display:flex;height:100%;}
-    .m-only{display:inline-block;} .dock{grid-template-columns:1fr auto;padding:0 12px;height:68px;} .dock-m,.vol,.dock-r .hide-m{display:none;} .search-wrap{max-width:170px;}
+    .m-only{display:inline-block;} .dock{grid-template-columns:1fr auto;padding:0 12px;height:68px;} .dock-m,.vol,.dock-r .hide-m{display:none;}
+    .topbar{height:auto;flex-wrap:wrap;padding:8px 12px;gap:8px;} .nav-pills{order:3;width:100%;padding-top:2px;} .search-wrap{max-width:none;flex:1;}
   }
 </style>
 </head>
@@ -122,7 +107,7 @@ export const PLAYER_HTML = `<!DOCTYPE html>
           <img id="sCov" class="stage-cov" referrerpolicy="no-referrer" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect fill='%23161e2e' width='100' height='100'/%3E%3C/svg%3E" />
           <div class="stage-meta">
             <div class="stage-title" id="sTitle">Music Hub 极速单页</div>
-            <div class="stage-artist" id="sArtist">点击左侧歌曲，浏览器直连多源秒播</div>
+            <div class="stage-artist" id="sArtist">点击左侧歌曲，本地网络直连多源秒播</div>
             <div style="display:flex;gap:6px;margin-top:8px;">
               <button class="src-item" onclick="toggleCurFav()" id="sFavBtn">&#9825; 收藏</button>
               <button class="src-item m-only" onclick="toggleMobileStage(false)">返回列表</button>
@@ -163,7 +148,7 @@ if (new URLSearchParams(location.search).get("token")) localStorage.setItem("mh_
 
 var chartsCache = [], artistsCache = [], albumsCache = [], artistCat = "全部", chartCat = "全部", albumQuery = "华语经典";
 var viewSongs = [], playQueue = [], curIdx = -1, curSong = null, playMode = "loop", lrcRows = [], timerId = null;
-var candidates = [], curCandIdx = -1, playSeq = 0;
+var candidates = [], curCandIdx = -1, playSeq = 0, autoWaitMeta = false;
 var pageState = { type: "", query: "", page: 1, hasMore: false, artistAlbums: [], artistTab: "songs", artistName: "", artistTag: "" };
 var audio = document.getElementById("audio"); audio.volume = 0.9;
 var favs = JSON.parse(localStorage.getItem("mh_favs") || "[]");
@@ -181,10 +166,8 @@ function showAuth() {
 }
 function saveToken() { TOKEN = document.getElementById("tkIn").value.trim(); localStorage.setItem("mh_token", TOKEN); nav("discover"); }
 function toggleMobileStage(show) { document.getElementById("leftPane").classList.toggle("hide-m", show); document.getElementById("rightStage").classList.toggle("show-m", show); }
-function setNav(id) {
-  toggleMobileStage(false);
-  ["discover", "albums", "artists", "queue", "fav"].forEach(function(k) { var el = document.getElementById("n-" + k); if (el) el.classList.toggle("active", k === id); });
-}
+function setNav(id) { toggleMobileStage(false); ["discover", "albums", "artists", "queue", "fav"].forEach(function(k) { var el = document.getElementById("n-" + k); if (el) el.classList.toggle("active", k === id); }); }
+
 function nav(tab) {
   setNav(tab);
   if (tab === "queue") { renderSongList("当前播放队列", "共 " + playQueue.length + " 首", "", playQueue, false); return; }
@@ -192,10 +175,7 @@ function nav(tab) {
   if (tab === "albums") { loadAlbumsPage(albumQuery); return; }
   if (chartsCache.length) { if (tab === "artists") renderArtists(); else renderDiscover(); return; }
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">正在加载...</div>';
-  api("/api/home").then(function(d) {
-    chartsCache = d.charts || []; artistsCache = d.artists || [];
-    if (tab === "artists") renderArtists(); else renderDiscover();
-  }).catch(function(){});
+  api("/api/home").then(function(d) { chartsCache = d.charts || []; artistsCache = d.artists || []; if (tab === "artists") renderArtists(); else renderDiscover(); }).catch(function(){});
 }
 
 function renderDiscover() {
@@ -230,8 +210,7 @@ function renderArtists() {
 }
 
 function loadAlbumsPage(q) {
-  albumQuery = q;
-  var aCats = ["华语经典", "粤语经典", "周杰伦", "张学友", "陈奕迅", "日本动漫", "欧美流行"];
+  albumQuery = q; var aCats = ["华语经典", "粤语经典", "周杰伦", "张学友", "陈奕迅", "日本动漫", "欧美流行"];
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">加载专辑墙...</div>';
   api("/api/albums?q=" + encodeURIComponent(q)).then(function(d) {
     albumsCache = d.albums || [];
@@ -283,7 +262,6 @@ function openAlbumObj(i, fromArtist) {
     renderSongList(info.title, (info.artist || al.artist) + " · 专辑曲目 " + (d.songs || []).length + " 首", info.cover || al.cover, d.songs || [], false);
   });
 }
-
 function openChartIdx(i) {
   var c = chartsCache[i]; if (!c) return;
   pageState = { type: "chart", query: c.id, page: 1, hasMore: false };
@@ -292,7 +270,6 @@ function openChartIdx(i) {
     var ch = d.chart || c; renderSongList(ch.title, ch.description || "精选榜单", ch.cover || "", d.songs || [], false);
   });
 }
-
 function doSearch(page) {
   var q = document.getElementById("qInput").value.trim(); if (!q) return nav("discover");
   setNav("discover");
@@ -303,7 +280,6 @@ function doSearch(page) {
     renderSongList("搜索：" + q, "已加载 " + viewSongs.length + " 首", (viewSongs[0] && viewSongs[0].cover) || "", viewSongs, pageState.hasMore);
   });
 }
-
 function loadMore() {
   var nextP = (pageState.page || 1) + 1;
   if (pageState.type === "search") { doSearch(nextP); return; }
@@ -316,14 +292,12 @@ function loadMore() {
     });
   }
 }
-
 function renderSongList(title, sub, cover, songs, hasMore) {
   viewSongs = songs || [];
   var h = '<div class="list-head">' + (cover ? '<img class="list-cov" referrerpolicy="no-referrer" src="' + cover + '" />' : '<div class="list-cov">' + esc(title.slice(0, 1)) + '</div>') +
     '<div style="flex:1;min-width:160px;"><div style="font-size:19px;font-weight:800;">' + esc(title) + '</div><div style="font-size:12px;color:var(--muted);margin:4px 0 10px;">' + esc(sub) + '</div><div style="display:flex;gap:8px;"><button class="btn" onclick="playAll()">&#9654; 播放全部</button><button class="btn ghost" onclick="nav(\\'discover\\')">返回发现</button></div></div></div>';
   document.getElementById("leftPane").innerHTML = h + buildSongsRowsHtml(viewSongs, hasMore);
 }
-
 function buildSongsRowsHtml(songs, hasMore) {
   if (!songs.length) return '<div style="padding:36px;text-align:center;color:var(--muted);">暂无歌曲</div>';
   var h = "";
@@ -334,12 +308,10 @@ function buildSongsRowsHtml(songs, hasMore) {
   if (hasMore) h += '<div style="text-align:center;padding:16px;"><button class="btn ghost" onclick="loadMore()">加载更多歌曲 &darr;</button></div>';
   return h;
 }
-
 function playAll() { if (viewSongs.length) { playQueue = viewSongs.slice(); playQueueIdx(0); } }
 function playViewIdx(i) { playQueue = viewSongs.slice(); playQueueIdx(i); }
 function addNext(i) { var s = viewSongs[i]; if (!s) return; if (!playQueue.length) { playQueue = [s]; playQueueIdx(0); return; } playQueue.splice(curIdx + 1, 0, s); }
 
-// ========== 核心：浏览器直连 GDStudio（绕开 CF 503）+ 云端并发多源 + 明牌选源 ==========
 function renderSrcBar() {
   var bar = document.getElementById("srcBar");
   if (!candidates.length) { bar.innerHTML = '<span style="font-size:11px;color:var(--muted);">正在并发探测全网可用音源...</span>'; return; }
@@ -348,41 +320,31 @@ function renderSrcBar() {
     return '<button class="' + cls + '" onclick="pickCandidate(' + i + ',true)">' + esc(c.label) + '</button>';
   }).join("");
 }
-
 function addCandidate(seq, cand) {
   if (seq !== playSeq || !cand || !cand.url) return;
   for (var i = 0; i < candidates.length; i++) { if (candidates[i].url === cand.url) return; }
   candidates.push(cand);
-  var idx = candidates.length - 1;
-  // 若当前还未开播完整版（或当前正在放 30s 试听而新源是完整版），立刻自动切上去！
-  var curCand = candidates[curCandIdx];
-  if (curCandIdx < 0 || (curCand && curCand.isTrial && !cand.isTrial)) {
-    pickCandidate(idx);
-  } else {
-    renderSrcBar();
-  }
+  var idx = candidates.length - 1, curCand = candidates[curCandIdx];
+  if (curCandIdx < 0 || (curCand && curCand.isTrial && !cand.isTrial)) pickCandidate(idx, false);
+  else renderSrcBar();
 }
-
-var autoWaitMeta = false;
 function pickCandidate(i, manual) {
   var c = candidates[i]; if (!c) return;
-  curCandIdx = i;
-  renderSrcBar();
+  curCandIdx = i; renderSrcBar();
   autoWaitMeta = !manual;
   audio.src = c.url;
   if (manual) {
-    audio.play().catch(function(){});
-    setPlayIcon(true);
+    audio.play().catch(function(){}); setPlayIcon(true);
     document.getElementById("dArtist").textContent = (curSong ? curSong.artist : "") + " · " + c.label;
   } else {
-    document.getElementById("dArtist").textContent = (curSong ? curSong.artist : "") + " · 校验时长: " + c.label;
+    document.getElementById("dArtist").textContent = (curSong ? curSong.artist : "") + " · 校验完整版: " + c.label;
   }
 }
 
 function fetchDirectGD(s, plat, label, seq) {
   var cleanArtist = (s.artist || "").split(/[/,、&]/)[0].trim();
-  var kw = (s.title + " " + cleanArtist).replace(/[\\(\\)\\[\\]【】]/g, " ").trim();
-  var base = "https://music-api.gdstudio.xyz/api.php?types=";
+  var kw = (s.title + " " + cleanArtist).replace(/[()\\[\\]（）【】]/g, " ").trim();
+  var base = "https://music-api.gdstudio.xyz/api.php?use_xbridge3=true&types=";
   var p = (plat === "netease" && s.ext_source === "netease" && s.ext_id)
     ? Promise.resolve(s.ext_id)
     : fetch(base + "search&source=" + plat + "&name=" + encodeURIComponent(kw) + "&count=3&pages=1")
@@ -395,8 +357,7 @@ function fetchDirectGD(s, plat, label, seq) {
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (!d || !d.url || seq !== playSeq) return;
-        var isTrial = Boolean(d.size && s.duration >= 90 && Number(d.size) < 1300);
-        if (isTrial) return; // 直接丢弃明确小于 1.3MB 的 30s 试听
+        if (d.size && s.duration >= 90 && Number(d.size) < 1300) return;
         addCandidate(seq, { label: label + (d.br ? "(" + d.br + "k)" : ""), url: d.url, isTrial: false });
       });
   }).catch(function(){});
@@ -405,42 +366,31 @@ function fetchDirectGD(s, plat, label, seq) {
 function playQueueIdx(idx) {
   if (idx < 0 || idx >= playQueue.length) return;
   curIdx = idx; var s = playQueue[idx]; curSong = s;
-  playSeq++; var seq = playSeq;
-  candidates = []; curCandIdx = -1;
-
-  // 立即停掉上一首，防止残留 30s 音频继续放
-  audio.pause(); audio.removeAttribute("src"); audio.load();
-  setPlayIcon(false);
+  playSeq++; var seq = playSeq; candidates = []; curCandIdx = -1; autoWaitMeta = false;
+  audio.pause(); audio.removeAttribute("src"); audio.load(); setPlayIcon(false);
 
   document.getElementById("dTitle").textContent = s.title;
   document.getElementById("dArtist").textContent = s.artist + " · 多源并发连接中...";
   document.getElementById("sTitle").textContent = s.title;
   document.getElementById("sArtist").textContent = s.artist;
-  if (s.cover) {
-    document.getElementById("sCov").src = s.cover;
-    document.getElementById("stageBlur").style.backgroundImage = 'url("' + s.cover + '")';
-  }
+  if (s.cover) { document.getElementById("sCov").src = s.cover; document.getElementById("stageBlur").style.backgroundImage = 'url("' + s.cover + '")'; }
   updateFavBtn(); renderSrcBar();
 
-  // 1. 浏览器直连 GDStudio 三大无会员/港台大库（用你本地网络 IP，0 CF 503 封锁！）
   fetchDirectGD(s, "kuwo", "酷我(直连)", seq);
   fetchDirectGD(s, "joox", "JOOX(直连)", seq);
   fetchDirectGD(s, "netease", "网易(直连)", seq);
 
-  // 2. 同时请求自家 Cloudflare Worker 后端兜底（塞壬唱片 / R2 / 酷我车载 / VKeys）
   var qUrl = "/api/play?id=" + (s.id || 0) + "&q=high&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "") + "&album=" + encodeURIComponent(s.album || "") + "&cover=" + encodeURIComponent(s.cover || "") + "&duration=" + (s.duration || 0);
   api(qUrl).then(function(res) {
     if (seq !== playSeq) return;
     if (res.songId) s.id = res.songId;
-    if (!res.error && res.url) {
-      addCandidate(seq, { label: "云端(" + (res.source || "ok") + ")", url: res.needProxy ? res.proxyUrl : res.url, isTrial: false });
-    } else if (!candidates.length) {
+    if (!res.error && res.url) addCandidate(seq, { label: "云端(" + (res.source || "ok") + ")", url: res.needProxy ? res.proxyUrl : res.url, isTrial: false });
+    else if (!candidates.length) {
       document.getElementById("srcBar").innerHTML = '<span style="font-size:11px;color:var(--warn);">暂未匹配到完整源 (' + esc((res.trace || []).join(" | ")) + ')</span>';
       document.getElementById("dArtist").textContent = s.artist + " · 暂无可用完整源";
     }
   }).catch(function(){});
 
-  // 3. 获取歌词
   api("/api/song?id=" + (s.id || 0) + "&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "")).then(function(d) {
     if (seq === playSeq) parseLrc((d.song && d.song.lyric_lrc) || "", (d.song && d.song.lyric_trans) || "");
   });
@@ -453,17 +403,17 @@ audio.addEventListener("loadedmetadata", function() {
     c.isTrial = true;
     if (c.label.indexOf("[试听]") < 0) c.label += "[试听]";
     renderSrcBar();
-    for (var i = 0; i < candidates.length; i++) {
-      if (!candidates[i].isTrial) { pickCandidate(i, false); return; }
-    }
+    for (var i = 0; i < candidates.length; i++) { if (!candidates[i].isTrial) { pickCandidate(i, false); return; } }
     return;
   }
   if (autoWaitMeta && c) {
     autoWaitMeta = false;
-    audio.play().catch(function(){});
-    setPlayIcon(true);
+    audio.play().catch(function(){}); setPlayIcon(true);
     document.getElementById("dArtist").textContent = (curSong ? curSong.artist : "") + " · " + c.label;
   }
+});
+audio.addEventListener("error", function() {
+  if (curCandIdx >= 0 && curCandIdx + 1 < candidates.length) pickCandidate(curCandIdx + 1, false);
 });
 
 function setPlayIcon(p) { var i = p ? "&#10074;&#10074;" : "&#9654;"; document.getElementById("playFab").innerHTML = i; document.getElementById("playFabM").innerHTML = i; }
@@ -479,7 +429,6 @@ audio.addEventListener("timeupdate", function() {
   if (d > 0) document.getElementById("seek").value = (c / d) * 100;
   highlightLrc(c);
 });
-
 function updateMediaSession(s) {
   if (!("mediaSession" in navigator)) return;
   try {
@@ -493,7 +442,6 @@ function saveFav(s) { if (isFav(s)) favs = favs.filter(function(f) { return f.no
 function toggleViewFav(i, btn) { var s = viewSongs[i]; if (!s) return; saveFav(s); var l = isFav(s); btn.classList.toggle("loved", l); btn.innerHTML = l ? "&#9829;" : "&#9825;"; }
 function toggleCurFav() { if (curSong) saveFav(curSong); }
 function updateFavBtn() { var l = isFav(curSong), el = document.getElementById("sFavBtn"); if (el) el.innerHTML = l ? "&#9829; 已收藏" : "&#9825; 收藏"; }
-
 function parseLrc(raw, transRaw) {
   lrcRows = []; var transMap = {};
   (transRaw || "").split(/\\r?\\n/).forEach(function(line) { var m = line.match(/\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)/); if (m) transMap[Math.round((Number(m[1]) * 60 + Number(m[2])) * 10)] = m[3].trim(); });
