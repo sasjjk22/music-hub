@@ -1,0 +1,20 @@
+{
+  "desc": "《Music Hub》纯净全网聚合订阅源（无广告 / 自动防试听换源 / B站WBI兜底 / 官方无损）",
+  "plugins": [
+    {
+      "name": "MusicHub·全网聚合",
+      "url": "https://cdn.jsdelivr.net/gh/sasjjk22/music-hub@main/plugins/music-hub-agg.js",
+      "version": "1.0.0"
+    },
+    {
+      "name": "MusicHub·B站音频(WBI修复)",
+      "url": "https://cdn.jsdelivr.net/gh/sasjjk22/music-hub@main/plugins/music-hub-bili.js",
+      "version": "1.0.0"
+    },
+    {
+      "name": "MusicHub·塞壬唱片(官方无损)",
+      "url": "https://cdn.jsdelivr.net/gh/sasjjk22/music-hub@main/plugins/music-hub-msr.js",
+      "version": "1.0.0"
+    }
+  ]
+}
