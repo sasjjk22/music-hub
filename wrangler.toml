@@ -1,0 +1,13 @@
+name = "music-hub"
+main = "src/worker.js"
+compatibility_date = "2026-11-25"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "music-db"
+database_id = "e6595663-7279-4c0d-9d63-ff8c903c18b9"
+
+# 如已开通 R2 存绝版无损，取消下面 4 行注释即可
+# [[r2_buckets]]
+# binding = "R2"
+# bucket_name = "music-r2"
