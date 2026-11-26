@@ -345,7 +345,7 @@ function renderSrcBar() {
   if (!candidates.length) { bar.innerHTML = '<span style="font-size:11px;color:var(--muted);">正在并发探测全网可用音源...</span>'; return; }
   bar.innerHTML = candidates.map(function(c, i) {
     var cls = i === curCandIdx ? "src-item cur" : (c.isTrial ? "src-item warn" : "src-item ok");
-    return '<button class="' + cls + '" onclick="pickCandidate(' + i + ')">' + esc(c.label) + '</button>';
+    return '<button class="' + cls + '" onclick="pickCandidate(' + i + ',true)">' + esc(c.label) + '</button>';
   }).join("");
 }
 
@@ -363,14 +363,20 @@ function addCandidate(seq, cand) {
   }
 }
 
-function pickCandidate(i) {
+var autoWaitMeta = false;
+function pickCandidate(i, manual) {
   var c = candidates[i]; if (!c) return;
   curCandIdx = i;
   renderSrcBar();
+  autoWaitMeta = !manual;
   audio.src = c.url;
-  audio.play().catch(function(){});
-  setPlayIcon(true);
-  document.getElementById("dArtist").textContent = (curSong ? curSong.artist : "") + " · " + c.label;
+  if (manual) {
+    audio.play().catch(function(){});
+    setPlayIcon(true);
+    document.getElementById("dArtist").textContent = (curSong ? curSong.artist : "") + " · " + c.label;
+  } else {
+    document.getElementById("dArtist").textContent = (curSong ? curSong.artist : "") + " · 校验时长: " + c.label;
+  }
 }
 
 function fetchDirectGD(s, plat, label, seq) {
@@ -441,19 +447,23 @@ function playQueueIdx(idx) {
   updateMediaSession(s);
 }
 
-// 浏览器若测出当前加载只有 30 秒试听，自动标黄并切到下一个候选完整源
 audio.addEventListener("loadedmetadata", function() {
-  if (curSong && curSong.duration >= 90 && audio.duration > 0 && audio.duration <= 45 && candidates[curCandIdx]) {
-    candidates[curCandIdx].isTrial = true;
-    candidates[curCandIdx].label += "[30s]";
+  var c = candidates[curCandIdx];
+  if (autoWaitMeta && curSong && curSong.duration >= 90 && audio.duration > 0 && audio.duration <= 45 && c) {
+    c.isTrial = true;
+    if (c.label.indexOf("[试听]") < 0) c.label += "[试听]";
     renderSrcBar();
     for (var i = 0; i < candidates.length; i++) {
-      if (!candidates[i].isTrial) { pickCandidate(i); return; }
+      if (!candidates[i].isTrial) { pickCandidate(i, false); return; }
     }
+    return;
   }
-});
-audio.addEventListener("error", function() {
-  if (curCandIdx >= 0 && curCandIdx + 1 < candidates.length) { pickCandidate(curCandIdx + 1); }
+  if (autoWaitMeta && c) {
+    autoWaitMeta = false;
+    audio.play().catch(function(){});
+    setPlayIcon(true);
+    document.getElementById("dArtist").textContent = (curSong ? curSong.artist : "") + " · " + c.label;
+  }
 });
 
 function setPlayIcon(p) { var i = p ? "&#10074;&#10074;" : "&#9654;"; document.getElementById("playFab").innerHTML = i; document.getElementById("playFabM").innerHTML = i; }
