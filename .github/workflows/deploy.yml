@@ -3,7 +3,7 @@ name: Deploy Music Hub Worker
 on:
   push:
     branches: [main]
-    paths: ["src/**", "wrangler.toml", "schema.sql", ".github/workflows/deploy.yml"]
+    paths: ["SRC/**", "wrangler.toml", "schema.sql", ".github/workflows/deploy.yml"]
   workflow_dispatch:
 
 jobs:
