@@ -31,7 +31,18 @@ function json(data, status = 200, extraHeaders = {}) {
     headers: { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Access-Token, X-Admin-Token", ...extraHeaders },
   });
 }
-function html(body, status = 200) { return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8" } }); }
+function html(body, status = 200, extraHeaders = {}) {
+  return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8", ...extraHeaders } });
+}
+async function withEdgeCache(ctx, keyPath, ttlSec, fn) {
+  const cache = caches.default;
+  const cacheKey = new Request("https://cache.internal/v3" + keyPath);
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  const resp = await fn(ttlSec);
+  if (resp.status === 200 && !resp.headers.has("X-Skip-Cache")) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+  return resp;
+}
 function getTokenFromReq(request) {
   const url = new URL(request.url);
   return url.searchParams.get("token") || request.headers.get("X-Access-Token") || (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
@@ -76,6 +87,16 @@ async function verifyNot30sTrial(url, durationSec) {
   }
 }
 
+function mapNeteaseSong(s) {
+  const artists = (s.ar || s.artists || []).map((a) => a.name).filter(Boolean).join(" / ") || "未知歌手";
+  const alb = s.al || s.album || {};
+  return {
+    id: 0, norm_key: makeNormKey(s.name, artists), title: s.name, artist: artists,
+    album: alb.name || "", cover: alb.picUrl || "", duration: Math.round((s.dt || s.duration || 0) / 1000),
+    category: "网易精选", ext_source: "netease", ext_id: String(s.id),
+  };
+}
+
 async function liveSearchSongs(query, limit = 40, page = 1) {
   const out = [], seen = new Set(), offset = Math.max(0, (page - 1) * limit);
   for (const ep of [
@@ -88,10 +109,10 @@ async function liveSearchSongs(query, limit = 40, page = 1) {
       const songs = (await r.json())?.result?.songs || [];
       for (const s of songs) {
         if (!s.name || isJunkTitle(s.name, query)) continue;
-        const artists = (s.ar || s.artists || []).map((a) => a.name).filter(Boolean).join(" / ") || "未知歌手";
-        const nk = makeNormKey(s.name, artists); if (seen.has(nk)) continue; seen.add(nk);
-        const alb = s.al || s.album || {};
-        out.push({ id: 0, norm_key: nk, title: s.name, artist: artists, album: alb.name || "", cover: alb.picUrl || "", duration: Math.round((s.dt || s.duration || 0) / 1000), category: "全网搜索", ext_source: "netease", ext_id: String(s.id) });
+        const item = mapNeteaseSong(s);
+        if (seen.has(item.norm_key)) continue;
+        seen.add(item.norm_key);
+        out.push(item);
       }
       if (out.length) break;
     } catch {}
@@ -99,12 +120,47 @@ async function liveSearchSongs(query, limit = 40, page = 1) {
   return out;
 }
 
+// 用官方歌手 ID 精确拉取正版 Top 50 热门单曲与正版录音室专辑（彻底踢掉野鸡翻唱专辑）
+async function fetchOfficialArtistData(name) {
+  try {
+    const sr = await fetchTimeout(
+      `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(name)}&type=100&limit=5&offset=0`,
+      { headers: NE_HEADERS }, 4000
+    );
+    const list = (await sr.json())?.result?.artists || [];
+    if (!list.length) return { songs: [], albums: [] };
+    const nl = name.toLowerCase();
+    const target = list.find((a) => (a.name || "").toLowerCase() === nl) || list[0];
+    const aid = target.id;
+
+    const [hotR, albR] = await Promise.all([
+      fetchTimeout(`https://music.163.com/api/artist/${aid}`, { headers: NE_HEADERS }, 4500),
+      fetchTimeout(`https://music.163.com/api/artist/albums/${aid}?limit=30&offset=0`, { headers: NE_HEADERS }, 4500),
+    ]);
+    const hotData = await hotR.json().catch(() => ({}));
+    const albData = await albR.json().catch(() => ({}));
+
+    const songs = (hotData.hotSongs || []).filter((s) => s.name && !isJunkTitle(s.name, name)).map(mapNeteaseSong);
+    const albums = (albData.hotAlbums || []).map((a) => ({
+      id: String(a.id), title: a.name, artist: a.artist?.name || target.name || name,
+      cover: a.picUrl || "", size: a.size || 0,
+      publishTime: a.publishTime ? new Date(a.publishTime).toISOString().slice(0, 10) : "",
+    }));
+    return { songs, albums };
+  } catch {
+    return { songs: [], albums: [] };
+  }
+}
+
 async function liveSearchAlbums(query, limit = 24, page = 1) {
   const offset = Math.max(0, (page - 1) * limit);
   try {
-    const r = await fetchTimeout(`https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(query)}&type=10&limit=${limit}&offset=${offset}`, { headers: NE_HEADERS }, 4000);
+    const r = await fetchTimeout(`https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(query)}&type=10&limit=${limit + 12}&offset=${offset}`, { headers: NE_HEADERS }, 4500);
     const albs = (await r.json())?.result?.albums || [];
-    return albs.map((a) => ({
+    // 过滤掉只有 1~2 首歌的个人播客/野鸡单曲专辑，只留正经专辑
+    const clean = albs.filter((a) => (a.size || 0) >= 4);
+    const picked = clean.length ? clean : albs;
+    return picked.slice(0, limit).map((a) => ({
       id: String(a.id), title: a.name, artist: a.artist?.name || query, cover: a.picUrl || "",
       size: a.size || 0, publishTime: a.publishTime ? new Date(a.publishTime).toISOString().slice(0, 10) : "",
     }));
@@ -139,25 +195,15 @@ async function raceKuwoAll(song, ids, trace) {
       const r = await fetchTimeout(ep, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, 2600);
       const txt = await r.text();
       let u = "", ekey = "", dur = 0;
-      try {
-        const j = JSON.parse(txt);
-        u = j?.data?.url || j?.url || "";
-        ekey = j?.data?.ekey || "";
-        dur = Number(j?.data?.duration || 0);
-      } catch {
-        const m = txt.match(/url=(http[^\s\r\n]+)/);
-        if (m) u = m[1];
-      }
+      try { const j = JSON.parse(txt); u = j?.data?.url || j?.url || ""; ekey = j?.data?.ekey || ""; dur = Number(j?.data?.duration || 0); }
+      catch { const m = txt.match(/url=(http[^\s\r\n]+)/); if (m) u = m[1]; }
       if (ekey || !isBasicAudioUrl(u)) throw new Error("kw_invalid");
       if (dur > 0 && song.duration >= 90 && dur <= 65) throw new Error("kw_trial");
       const real = await verifyNot30sTrial(u, song.duration);
       if (!real) throw new Error("kw_trial_size");
       return { url: real, source: "kuwo", kuwoId: rid };
     }));
-  } catch {
-    trace.push("kw:fail");
-    throw new Error("kw_fail");
-  }
+  } catch { trace.push("kw:fail"); throw new Error("kw_fail"); }
 }
 
 async function raceGDStudio(song, ids, trace) {
@@ -240,9 +286,8 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
   }
 
   const raceList = [];
-  if (prefer === "kuwo") {
-    raceList.push(raceKuwoAll(song, ids, trace));
-  } else {
+  if (prefer === "kuwo") raceList.push(raceKuwoAll(song, ids, trace));
+  else {
     raceList.push(raceKuwoAll(song, ids, trace), raceGDStudio(song, ids, trace), raceVKeys(song, ids, trace));
     if (skip !== "meting") {
       raceList.push(
@@ -252,12 +297,8 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
     }
   }
 
-  try {
-    const winner = await Promise.any(raceList);
-    return { ...winner, trace };
-  } catch {
-    return { error: "可用完整源均未命中", trace };
-  }
+  try { const winner = await Promise.any(raceList); return { ...winner, trace }; }
+  catch { return { error: "可用完整源均未命中", trace }; }
 }
 
 async function fetchLiveLyric(extSource, extId, title, artist) {
@@ -291,8 +332,8 @@ export default {
     try {
       if (request.method === "OPTIONS") return json({ ok: true });
       const url = new URL(request.url), path = url.pathname;
-      if (path === "/" || path === "/player") return html(PLAYER_HTML);
-      if (path === "/admin") return html(ADMIN_HTML);
+      if (path === "/" || path === "/player") return html(PLAYER_HTML, 200, { "Cache-Control": "public, max-age=300" });
+      if (path === "/admin") return html(ADMIN_HTML, 200, { "Cache-Control": "public, max-age=300" });
       if (path === "/health") return json({ name: "Music Hub API", status: "ok", time: Date.now() });
 
       if (path === "/api/admin/login" && request.method === "POST") {
@@ -458,59 +499,91 @@ export default {
       }
 
       if (path === "/api/home") {
-        const { results } = await env.DB.prepare("SELECT id, title, category, cover, description FROM charts ORDER BY sort_order ASC").all();
-        return json({ charts: results || [], artists: PRESET_ARTISTS });
+        return withEdgeCache(ctx, "/home", 600, async (ttl) => {
+          const { results } = await env.DB.prepare("SELECT id, title, category, cover, description FROM charts ORDER BY sort_order ASC").all();
+          return json({ charts: results || [], artists: PRESET_ARTISTS }, 200, { "Cache-Control": `public, max-age=${ttl}` });
+        });
       }
       if (path === "/api/chart") {
         const id = url.searchParams.get("id"); if (!id) return json({ error: "missing id" }, 400);
-        const chart = await env.DB.prepare("SELECT * FROM charts WHERE id = ?").bind(id).first();
-        if (!chart) return json({ error: "chart not found" }, 404);
-        const ids = JSON.parse(chart.song_ids_json || "[]").slice(0, 160); if (!ids.length) return json({ chart, songs: [] });
-        const map = new Map();
-        for (let i = 0; i < ids.length; i += 80) {
-          const chunk = ids.slice(i, i + 80), placeholders = chunk.map(() => "?").join(",");
-          const { results } = await env.DB.prepare(`SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked=0 AND id IN (${placeholders})`).bind(...chunk).all();
-          for (const s of results || []) map.set(s.id, s);
-        }
-        return json({ chart: { id: chart.id, title: chart.title, cover: chart.cover, description: chart.description }, songs: ids.map((sid) => map.get(sid)).filter(Boolean) });
+        return withEdgeCache(ctx, `/chart/${encodeURIComponent(id)}`, 600, async (ttl) => {
+          const chart = await env.DB.prepare("SELECT * FROM charts WHERE id = ?").bind(id).first();
+          if (!chart) return json({ error: "chart not found" }, 404);
+          const ids = JSON.parse(chart.song_ids_json || "[]").slice(0, 160); if (!ids.length) return json({ chart, songs: [] });
+          const map = new Map();
+          for (let i = 0; i < ids.length; i += 80) {
+            const chunk = ids.slice(i, i + 80), placeholders = chunk.map(() => "?").join(",");
+            const { results } = await env.DB.prepare(`SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked=0 AND id IN (${placeholders})`).bind(...chunk).all();
+            for (const s of results || []) map.set(s.id, s);
+          }
+          return json({ chart: { id: chart.id, title: chart.title, cover: chart.cover, description: chart.description }, songs: ids.map((sid) => map.get(sid)).filter(Boolean) }, 200, { "Cache-Control": `public, max-age=${ttl}` });
+        });
       }
       if (path === "/api/artist") {
         const name = (url.searchParams.get("name") || "").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
         if (!name) return json({ songs: [], albums: [] });
-        let localRows = [];
-        if (page === 1) localRows = (await env.DB.prepare("SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND artist LIKE ? ORDER BY score DESC LIMIT 50").bind(`%${name}%`).all()).results || [];
-        const seen = new Set(localRows.map((r) => r.norm_key));
-        const [live, albums] = await Promise.all([liveSearchSongs(name, 50, page), page === 1 ? liveSearchAlbums(name, 20, 1) : Promise.resolve([])]);
-        const nameLower = name.toLowerCase();
-        const filtered = live.filter((s) => !seen.has(s.norm_key) && (s.artist.toLowerCase().includes(nameLower) || nameLower.includes(s.artist.toLowerCase())));
-        return json({ artist: name, page, hasMore: live.length >= 35, songs: [...localRows, ...filtered], albums });
+        return withEdgeCache(ctx, `/artist/${encodeURIComponent(name)}/${page}`, 900, async (ttl) => {
+          let localRows = [];
+          if (page === 1) localRows = (await env.DB.prepare("SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND artist LIKE ? ORDER BY score DESC LIMIT 50").bind(`%${name}%`).all()).results || [];
+          const seen = new Set(localRows.map((r) => r.norm_key));
+
+          if (page === 1) {
+            const official = await fetchOfficialArtistData(name);
+            const mergedSongs = [...localRows];
+            for (const s of official.songs) { if (!seen.has(s.norm_key)) { seen.add(s.norm_key); mergedSongs.push(s); } }
+            // 若官方 Top50 为空，退回搜索
+            if (mergedSongs.length < 10) {
+              for (const s of await liveSearchSongs(name, 40, 1)) if (!seen.has(s.norm_key)) { seen.add(s.norm_key); mergedSongs.push(s); }
+            }
+            const hdrs = mergedSongs.length ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1" };
+            return json({ artist: name, page, hasMore: true, songs: mergedSongs, albums: official.albums }, 200, hdrs);
+          }
+
+          const live = await liveSearchSongs(name, 40, page);
+          const nameLower = name.toLowerCase();
+          const filtered = live.filter((s) => !seen.has(s.norm_key) && (s.artist.toLowerCase().includes(nameLower) || nameLower.includes(s.artist.toLowerCase())));
+          return json({ artist: name, page, hasMore: live.length >= 25, songs: filtered, albums: [] }, 200, { "Cache-Control": `public, max-age=${ttl}` });
+        });
       }
       if (path === "/api/albums") {
         const q = (url.searchParams.get("q") || "华语经典").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
-        const albums = await liveSearchAlbums(q, 24, page);
-        return json({ albums, hasMore: albums.length >= 20 });
+        return withEdgeCache(ctx, `/albums/${encodeURIComponent(q)}/${page}`, 900, async (ttl) => {
+          const albums = await liveSearchAlbums(q, 24, page);
+          return json({ albums, hasMore: albums.length >= 20 }, 200, albums.length ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1" });
+        });
       }
       if (path === "/api/album") {
         const id = (url.searchParams.get("id") || "").trim(); if (!id) return json({ error: "missing id" }, 400);
-        const d = await (await fetchTimeout(`https://music.163.com/api/album/${id}`, { headers: NE_HEADERS }, 5000)).json();
-        const alb = d?.album || {}, songs = (d?.songs || []).map((s) => {
-          const artists = (s.ar || s.artists || []).map((a) => a.name).filter(Boolean).join(" / ") || alb.artist?.name || "未知歌手";
-          return { id: 0, norm_key: makeNormKey(s.name, artists), title: s.name, artist: artists, album: alb.name || "", cover: alb.picUrl || s.al?.picUrl || "", duration: Math.round((s.dt || s.duration || 0) / 1000), category: "专辑", ext_source: "netease", ext_id: String(s.id) };
+        return withEdgeCache(ctx, `/album/${encodeURIComponent(id)}`, 1800, async (ttl) => {
+          let alb = {}, rawSongs = [];
+          for (const ep of [`https://music.163.com/api/v1/album/${id}`, `https://music.163.com/api/album/${id}`]) {
+            try {
+              const d = await (await fetchTimeout(ep, { headers: NE_HEADERS }, 5000)).json();
+              if (d?.album) alb = d.album;
+              if (Array.isArray(d?.songs) && d.songs.length) { rawSongs = d.songs; break; }
+            } catch {}
+          }
+          const songs = rawSongs.map((s) => {
+            const artists = (s.ar || s.artists || []).map((a) => a.name).filter(Boolean).join(" / ") || alb.artist?.name || "未知歌手";
+            return { id: 0, norm_key: makeNormKey(s.name, artists), title: s.name, artist: artists, album: alb.name || "", cover: alb.picUrl || s.al?.picUrl || "", duration: Math.round((s.dt || s.duration || 0) / 1000), category: "专辑", ext_source: "netease", ext_id: String(s.id) };
+          });
+          return json({ album: { id, title: alb.name || "", cover: alb.picUrl || "", artist: alb.artist?.name || "", description: (alb.description || "").slice(0, 120) }, songs }, 200, songs.length ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1" });
         });
-        return json({ album: { id, title: alb.name || "", cover: alb.picUrl || "", artist: alb.artist?.name || "", description: (alb.description || "").slice(0, 120) }, songs });
       }
       if (path === "/api/search") {
         const q = (url.searchParams.get("q") || "").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
         if (!q) return json({ songs: [] });
-        let localRows = [];
-        if (page === 1) {
-          if (q.length >= 3) localRows = (await env.DB.prepare(`SELECT s.id,s.norm_key,s.title,s.artist,s.album,s.cover,s.duration,s.category,s.source_ids_json FROM songs_fts f JOIN songs s ON s.id = f.rowid WHERE songs_fts MATCH ? AND s.is_blocked = 0 ORDER BY s.score DESC LIMIT 30`).bind(`"${q.replace(/"/g, "")}"`).all()).results || [];
-          if (!localRows.length) localRows = (await env.DB.prepare("SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND (title LIKE ? OR artist LIKE ?) ORDER BY score DESC LIMIT 25").bind(`%${q}%`, `%${q}%`).all()).results || [];
-        }
-        const merged = [...localRows], seen = new Set(merged.map((r) => r.norm_key));
-        const live = await liveSearchSongs(q, 40, page);
-        for (const item of live) if (!seen.has(item.norm_key)) { seen.add(item.norm_key); merged.push(item); }
-        return json({ page, hasMore: live.length >= 30, songs: merged });
+        return withEdgeCache(ctx, `/search/${encodeURIComponent(q)}/${page}`, 300, async (ttl) => {
+          let localRows = [];
+          if (page === 1) {
+            if (q.length >= 3) localRows = (await env.DB.prepare(`SELECT s.id,s.norm_key,s.title,s.artist,s.album,s.cover,s.duration,s.category,s.source_ids_json FROM songs_fts f JOIN songs s ON s.id = f.rowid WHERE songs_fts MATCH ? AND s.is_blocked = 0 ORDER BY s.score DESC LIMIT 30`).bind(`"${q.replace(/"/g, "")}"`).all()).results || [];
+            if (!localRows.length) localRows = (await env.DB.prepare("SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND (title LIKE ? OR artist LIKE ?) ORDER BY score DESC LIMIT 25").bind(`%${q}%`, `%${q}%`).all()).results || [];
+          }
+          const merged = [...localRows], seen = new Set(merged.map((r) => r.norm_key));
+          const live = await liveSearchSongs(q, 40, page);
+          for (const item of live) if (!seen.has(item.norm_key)) { seen.add(item.norm_key); merged.push(item); }
+          return json({ page, hasMore: live.length >= 30, songs: merged }, 200, { "Cache-Control": `public, max-age=${ttl}` });
+        });
       }
       if (path === "/api/song") {
         const id = Number(url.searchParams.get("id") || 0);
