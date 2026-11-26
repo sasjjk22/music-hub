@@ -24,18 +24,14 @@ const PRESET_ARTISTS = [
 ];
 const JUNK_WORDS = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版"];
 
-function fetchTimeout(url, opts = {}, ms = 4500) {
-  return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) });
-}
+function fetchTimeout(url, opts = {}, ms = 4000) { return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) }); }
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Access-Token, X-Admin-Token", ...extraHeaders },
   });
 }
-function html(body, status = 200) {
-  return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
-}
+function html(body, status = 200) { return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8" } }); }
 function getTokenFromReq(request) {
   const url = new URL(request.url);
   return url.searchParams.get("token") || request.headers.get("X-Access-Token") || (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
@@ -59,32 +55,31 @@ function cleanLrcText(raw) {
   return raw.split(/\r?\n/).filter((l) => !["作词 :", "作曲 :", "编曲 :", "制作人 :", "QQ音乐", "网易云"].some((k) => l.includes(k))).join("\n").trim();
 }
 
-// 严格剔除 404 跳转页、HTML 错误页与 30 秒试听截断
+// 严格剔除 30 秒试听（128k=480KB / 192k=720KB / 320k=1200KB）与 404/HTML 页
 async function checkAudioValid(url, durationSec) {
   if (!url || !url.startsWith("http") || url.includes("panspace.kuwo.cn") || url.includes("/404")) return null;
   try {
-    const res = await fetchTimeout(url, { headers: { Range: "bytes=0-1023", "User-Agent": UA }, redirect: "follow" }, 3200);
-    if (res.body) res.body.cancel().catch(() => {});
+    const res = await fetchTimeout(url, { method: "HEAD", headers: { "User-Agent": UA }, redirect: "follow" }, 2200);
     if (res.url && res.url.includes("/404")) return null;
     if (res.status === 404 || res.status === 410) return null;
-    if (res.status === 200 || res.status === 206) {
-      const ct = (res.headers.get("content-type") || "").toLowerCase();
-      if (ct.includes("text/html") || ct.includes("application/json")) return null;
-      const cr = res.headers.get("content-range") || "", cl = Number(res.headers.get("content-length") || 0);
-      const m = cr.match(/\/(\d+)$/), total = m ? Number(m[1]) : (res.status === 200 ? cl : 0);
-      if (total > 0 && durationSec >= 90 && total < 550 * 1024) return null;
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("text/html") || ct.includes("application/json")) return null;
+    const len = Number(res.headers.get("content-length") || 0);
+    if (len > 0 && durationSec >= 90) {
+      const minBytes = Math.max(1300 * 1024, durationSec * 8 * 1024);
+      if (len < minBytes) return null;
     }
     return res.url || url;
   } catch {
-    return url; // CDN 仅对机房超时时放行给客户端直连试播
+    return url;
   }
 }
 
-async function liveSearchSongs(query, limit = 30) {
-  const out = [], seen = new Set();
+async function liveSearchSongs(query, limit = 40, page = 1) {
+  const out = [], seen = new Set(), offset = Math.max(0, (page - 1) * limit);
   for (const ep of [
-    `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(query)}&type=1&limit=${limit}&offset=0`,
-    `https://music.163.com/api/search/get?s=${encodeURIComponent(query)}&type=1&limit=${limit}&offset=0`,
+    `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(query)}&type=1&limit=${limit}&offset=${offset}`,
+    `https://music.163.com/api/search/get?s=${encodeURIComponent(query)}&type=1&limit=${limit}&offset=${offset}`,
   ]) {
     try {
       const r = await fetchTimeout(ep, { headers: NE_HEADERS }, 4500);
@@ -103,189 +98,147 @@ async function liveSearchSongs(query, limit = 30) {
   return out;
 }
 
-// 并发源 A：Meting 公共高速节点
+async function liveSearchAlbums(query, limit = 24, page = 1) {
+  const offset = Math.max(0, (page - 1) * limit);
+  try {
+    const r = await fetchTimeout(`https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(query)}&type=10&limit=${limit}&offset=${offset}`, { headers: NE_HEADERS }, 4500);
+    const albs = (await r.json())?.result?.albums || [];
+    return albs.map((a) => ({
+      id: String(a.id),
+      title: a.name,
+      artist: a.artist?.name || query,
+      cover: a.picUrl || "",
+      size: a.size || 0,
+      publishTime: a.publishTime ? new Date(a.publishTime).toISOString().slice(0, 10) : "",
+    }));
+  } catch { return []; }
+}
+
+// 源 A：Meting（严查文件体积防 30s 试听）
 async function raceMeting(baseUrl, tag, neteaseId, durationSec, trace) {
   if (!neteaseId) throw new Error("no_id");
-  const r = await fetchTimeout(`${baseUrl}?server=netease&type=song&id=${neteaseId}`, { headers: { "User-Agent": UA } }, 3500);
+  const r = await fetchTimeout(`${baseUrl}?server=netease&type=song&id=${neteaseId}`, { headers: { "User-Agent": UA } }, 2800);
   if (!r.ok) { trace.push(`${tag}:http${r.status}`); throw new Error(r.status); }
   const arr = await r.json();
   const u = Array.isArray(arr) ? arr[0]?.url : arr?.url;
   const real = await checkAudioValid(u, durationSec);
-  if (!real) { trace.push(`${tag}:trial_or_404`); throw new Error("invalid"); }
+  if (!real) { trace.push(`${tag}:30s_skip`); throw new Error("trial"); }
   return { url: real, source: tag };
 }
 
-// 并发源 B：VKeys 解析
+// 源 B：VKeys（修复 QQ 参数 n=1，且拦截 30s 试听）
 async function raceVKeys(song, ids, trace) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
   const tasks = [];
   if (ids.netease) {
     tasks.push((async () => {
-      const r = await fetchTimeout(`https://api.vkeys.cn/v2/music/netease?id=${ids.netease}&quality=4`, { headers: { "User-Agent": UA } }, 3500);
+      const r = await fetchTimeout(`https://api.vkeys.cn/v2/music/netease?id=${ids.netease}&quality=4`, { headers: { "User-Agent": UA } }, 3200);
       const d = await r.json();
       const real = await checkAudioValid(d?.data?.url, song.duration);
-      if (!real) throw new Error("vk_ne_empty");
+      if (!real) throw new Error("vk_ne_skip");
       return { url: real, source: "vkeys:ne" };
     })());
   }
   tasks.push((async () => {
-    const r = await fetchTimeout(`https://api.vkeys.cn/v2/music/tencent?word=${encodeURIComponent(kw)}&choose=1&quality=4`, { headers: { "User-Agent": UA } }, 3500);
+    const r = await fetchTimeout(`https://api.vkeys.cn/v2/music/tencent?word=${encodeURIComponent(kw)}&n=1&quality=4`, { headers: { "User-Agent": UA } }, 3200);
     const d = await r.json();
     const real = await checkAudioValid(d?.data?.url, song.duration);
-    if (!real) throw new Error("vk_qq_empty");
+    if (!real) throw new Error("vk_qq_skip");
     return { url: real, source: "vkeys:qq" };
   })());
   try { return await Promise.any(tasks); }
-  catch { trace.push("vkeys:no_url"); throw new Error("vkeys"); }
+  catch { trace.push("vkeys:skip"); throw new Error("vkeys"); }
 }
 
-// 并发源 C：酷我 mobi.s 新版接口
+// 源 C：酷我车载 / 波点直连（带随机 user/loginUid 解锁 VIP 完整 MP3）
 async function raceKuwoMobi(song, ids, trace) {
   let rid = ids.kuwo || "";
   if (!rid) {
     const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
     const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
-    const sr = await fetchTimeout(`https://search.kuwo.cn/r.s?all=${encodeURIComponent(kw)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=3&rformat=json&encoding=utf8`, { headers: { "User-Agent": UA } }, 3000);
+    const sr = await fetchTimeout(`https://search.kuwo.cn/r.s?all=${encodeURIComponent(kw)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=3&rformat=json&encoding=utf8`, { headers: { "User-Agent": UA } }, 2800);
     const m = (await sr.text()).match(/MUSIC_(\d+)/);
     if (m) rid = m[1];
   }
   if (!rid) { trace.push("kw:no_rid"); throw new Error("no_rid"); }
-  const r = await fetchTimeout(`https://mobi.kuwo.cn/mobi.s?f=web&source=kwwear_ar_2.2.3_Fwatch.apk&type=convert_url_with_sign&rid=${rid}&br=320kmp3&format=mp3&from=PC`, { headers: { "User-Agent": UA } }, 3500);
-  const txt = await r.text();
-  let u = "";
-  try { const j = JSON.parse(txt); u = j?.data?.url || j?.url || ""; } catch { const m = txt.match(/url=(http[^\s\r\n]+)/); if (m) u = m[1]; }
-  const real = await checkAudioValid(u, song.duration);
-  if (!real) { trace.push("kw:empty"); throw new Error("kw_empty"); }
-  return { url: real, source: "kuwo_mobi", kuwoId: rid };
-}
 
-// 并发源 D：D1 sources 表聚合源（加 Origin 头尽量绕过拦截）
-async function raceAggSource(src, ids, durationSec, trace) {
-  const plats = Object.entries(ids).filter(([k]) => !["r2", "msr", "bili"].includes(k));
-  if (!plats.length) throw new Error("no_plat");
-  for (const [plat, pid] of plats) {
-    const r = await fetchTimeout(`${src.endpoint}?types=url&source=${plat}&id=${encodeURIComponent(pid)}&br=320`, { headers: { "User-Agent": UA, Referer: "https://music.gdstudio.xyz/", Origin: "https://music.gdstudio.xyz" } }, 3500);
-    if (!r.ok) { trace.push(`${src.id}_${plat}:http${r.status}`); continue; }
-    const d = await r.json();
-    const real = await checkAudioValid(d?.url, durationSec);
-    if (real) return { url: real, source: `${src.id}:${plat}` };
+  const uid = Math.floor(1000000 + Math.random() * 9000000);
+  const luid = Math.floor(1000000 + Math.random() * 9000000);
+  for (const srcApp of ["kwplayercar_ar_6.0.0.9", "kwplayerhd_ar_4.3.0.8_tianbao_T1A_qirui.apk"]) {
+    try {
+      const r = await fetchTimeout(
+        `https://mobi.kuwo.cn/mobi.s?f=web&user=${uid}&loginUid=${luid}&source=${srcApp}&type=convert_url_with_sign&br=320kmp3&rid=${rid}`,
+        { headers: { "User-Agent": UA } }, 3000
+      );
+      const txt = await r.text();
+      let u = "", ekey = "", dur = 0;
+      try { const j = JSON.parse(txt); u = j?.data?.url || j?.url || ""; ekey = j?.data?.ekey || ""; dur = Number(j?.data?.duration || 0); }
+      catch { const m = txt.match(/url=(http[^\s\r\n]+)/); if (m) u = m[1]; }
+      if (ekey) continue;
+      if (dur > 0 && song.duration >= 90 && dur <= 65) continue;
+      const real = await checkAudioValid(u, song.duration);
+      if (real) return { url: real, source: "kuwo_car", kuwoId: rid };
+    } catch {}
   }
-  throw new Error("agg_fail");
+  trace.push("kw:no_url");
+  throw new Error("kw_empty");
 }
 
-// 终极并发兜底：B站 search/all/v2（避开 WBI -352 风控！）
-async function resolveBilibili(title, artist, durationSec, fixedBvid, trace) {
-  try {
-    const spiR = await fetchTimeout("https://api.bilibili.com/x/frontend/finger/spi", { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, 3500);
-    const spi = (await spiR.json())?.data || {};
-    const cookie = `buvid3=${spi.b_3 || crypto.randomUUID()}; buvid4=${spi.b_4 || ""}`;
-
-    let bvid = fixedBvid;
-    if (!bvid) {
-      const cleanArtist = (artist || "").split(/[/,、&]/)[0].trim();
-      const kw = `${normalizeName(title)} ${cleanArtist}`.trim();
-      const sRes = await fetchTimeout(`https://api.bilibili.com/x/web-interface/search/all/v2?keyword=${encodeURIComponent(kw)}`, {
-        headers: { "User-Agent": UA, Referer: "https://search.bilibili.com/", Cookie: cookie },
-      }, 4500);
-      const sJson = await sRes.json();
-      if (sJson.code !== 0) { trace.push(`bili_s:${sJson.code}`); return null; }
-      const vGroup = (sJson?.data?.result || []).find((g) => g.result_type === "video");
-      const list = vGroup?.data || [];
-      if (!list.length) { trace.push("bili:empty"); return null; }
-      bvid = list[0].bvid;
-      if (durationSec > 0) {
-        const match = list.find((item) => {
-          const p = String(item.duration || "").split(":").map(Number);
-          const d = p.length === 2 ? p[0] * 60 + p[1] : p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : 0;
-          return d > 30 && Math.abs(d - durationSec) <= 15;
-        });
-        if (match) bvid = match.bvid;
-      }
-    }
-
-    const pRes = await fetchTimeout(`https://api.bilibili.com/x/player/pagelist?bvid=${bvid}`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, 3500);
-    const cid = (await pRes.json())?.data?.[0]?.cid;
-    if (!cid) { trace.push("bili:no_cid"); return null; }
-
-    for (const fnval of [4048, 1]) {
-      const uRes = await fetchTimeout(`https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64&fnval=${fnval}&otype=json`, { headers: { "User-Agent": UA, Referer: `https://www.bilibili.com/video/${bvid}`, Cookie: cookie } }, 4500);
-      const uData = (await uRes.json())?.data;
-      const audios = uData?.dash?.audio || [];
-      if (audios.length) {
-        audios.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
-        const su = audios[0].baseUrl || audios[0].base_url || audios[0].backupUrl?.[0];
-        if (su) return { url: su, needProxy: true, source: "bili", bvid };
-      }
-      if (uData?.durl?.[0]?.url) return { url: uData.durl[0].url, needProxy: true, source: "bili", bvid };
-    }
-    trace.push("bili:no_stream");
-  } catch (e) { trace.push(`bili:${e.name}`); }
-  return null;
-}
-
-async function resolvePlayUrl(song, quality, env, prefer = "") {
+async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
   const ids = JSON.parse(song.source_ids_json || "{}"), trace = [];
 
-  if (prefer === "bili") {
-    const bili = await resolveBilibili(song.title, song.artist, song.duration, ids.bili, trace);
-    if (bili) return { ...bili, trace };
-  }
   if (ids.r2 && env.R2 && env.R2_PUBLIC_URL) return { url: `${env.R2_PUBLIC_URL.replace(/\/$/, "")}/${ids.r2}`, source: "r2", trace };
   if (ids.msr) {
     try {
-      const u = (await (await fetchTimeout(`https://monster-siren.hypergryph.com/api/song/${ids.msr}`, {}, 4000)).json())?.data?.sourceUrl;
+      const u = (await (await fetchTimeout(`https://monster-siren.hypergryph.com/api/song/${ids.msr}`, {}, 3500)).json())?.data?.sourceUrl;
       if (u) return { url: u, source: "msr", trace };
     } catch { trace.push("msr:err"); }
   }
 
-  // 第 0 秒同时启动 B 站兜底与全网主源竞速（总耗时大幅压缩到 1~3 秒！）
-  const biliPromise = resolveBilibili(song.title, song.artist, song.duration, ids.bili, trace);
-  const { results: sources } = await env.DB.prepare("SELECT id, type, endpoint FROM sources WHERE enabled = 1 ORDER BY priority ASC").all();
-
-  const raceList = [
-    raceMeting("https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, trace),
-    raceMeting("https://meting-dd.2333332.xyz/api", "meting_dd", ids.netease, song.duration, trace),
-    raceVKeys(song, ids, trace),
-    raceKuwoMobi(song, ids, trace),
-  ];
-  for (const src of sources || []) {
-    if (src.type === "agg") raceList.push(raceAggSource(src, ids, song.duration, trace));
-  }
-  if (ids.netease) {
-    raceList.push((async () => {
-      const real = await checkAudioValid(`https://music.163.com/song/media/outer/url?id=${ids.netease}.mp3`, song.duration);
-      if (!real) { trace.push("ne_direct:trial_404"); throw new Error("ne_404"); }
-      return { url: real, source: "ne_direct" };
-    })());
+  const raceList = [];
+  if (prefer === "kuwo") raceList.push(raceKuwoMobi(song, ids, trace));
+  else {
+    raceList.push(raceKuwoMobi(song, ids, trace), raceVKeys(song, ids, trace));
+    if (skip !== "meting") {
+      raceList.push(
+        raceMeting("https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, trace),
+        raceMeting("https://meting-dd.2333332.xyz/api", "meting_dd", ids.netease, song.duration, trace)
+      );
+      if (ids.netease) {
+        raceList.push((async () => {
+          const real = await checkAudioValid(`https://music.163.com/song/media/outer/url?id=${ids.netease}.mp3`, song.duration);
+          if (!real) { trace.push("ne_direct:30s"); throw new Error("ne_30s"); }
+          return { url: real, source: "ne_direct" };
+        })());
+      }
+    }
   }
 
   try {
     const winner = await Promise.any(raceList);
     return { ...winner, trace };
   } catch {
-    const bili = await biliPromise;
-    if (bili) return { ...bili, trace };
+    return { error: "所有可用源均受限或为 30 秒试听", trace };
   }
-  return { error: "所有音源均解析失败", trace };
 }
 
 async function fetchLiveLyric(extSource, extId, title, artist) {
   if (extSource === "netease" && extId) {
     try {
-      const d = await (await fetchTimeout(`https://music.163.com/api/song/lyric?id=${extId}&lv=-1&kv=-1&tv=-1`, { headers: NE_HEADERS }, 4500)).json();
+      const d = await (await fetchTimeout(`https://music.163.com/api/song/lyric?id=${extId}&lv=-1&kv=-1&tv=-1`, { headers: NE_HEADERS }, 4000)).json();
       const lrc = cleanLrcText(d?.lrc?.lyric || ""), trans = cleanLrcText(d?.tlyric?.lyric || "");
       if (lrc) return { lrc, trans };
     } catch {}
   }
   if (extSource === "msr" && extId) {
     try {
-      const lrcUrl = (await (await fetchTimeout(`https://monster-siren.hypergryph.com/api/song/${extId}`, {}, 4000)).json())?.data?.lyricUrl;
-      if (lrcUrl) { const txt = cleanLrcText(await (await fetchTimeout(lrcUrl, {}, 4000)).text()); if (txt) return { lrc: txt, trans: "" }; }
+      const lrcUrl = (await (await fetchTimeout(`https://monster-siren.hypergryph.com/api/song/${extId}`, {}, 3500)).json())?.data?.lyricUrl;
+      if (lrcUrl) { const txt = cleanLrcText(await (await fetchTimeout(lrcUrl, {}, 3500)).text()); if (txt) return { lrc: txt, trans: "" }; }
     } catch {}
   }
   try {
-    const r = await fetchTimeout(`https://lrclib.net/api/get?track_name=${encodeURIComponent(normalizeName(title))}&artist_name=${encodeURIComponent((artist || "").split(/[/,、&]/)[0].trim())}`, {}, 4500);
+    const r = await fetchTimeout(`https://lrclib.net/api/get?track_name=${encodeURIComponent(normalizeName(title))}&artist_name=${encodeURIComponent((artist || "").split(/[/,、&]/)[0].trim())}`, {}, 4000);
     if (r.ok) { const d = await r.json(); const txt = d?.syncedLyrics || d?.plainLyrics || ""; if (txt) return { lrc: txt, trans: "" }; }
   } catch {}
   return { lrc: "", trans: "" };
@@ -427,8 +380,8 @@ export default {
           const t0 = Date.now(); let testUrl = src.endpoint;
           if (src.type === "agg") testUrl = `${src.endpoint}?types=search&source=netease&name=晴天&count=1&pages=1`;
           if (src.type === "native") testUrl = `${src.endpoint}/albums`;
-          if (src.type === "bili") testUrl = `https://api.bilibili.com/x/web-interface/search/all/v2?keyword=晴天`;
-          try { const r = await fetchTimeout(testUrl, { headers: { "User-Agent": UA } }, 5000); return json({ ok: r.ok, status: r.status, ms: Date.now() - t0 }); }
+          if (src.type === "vkeys") testUrl = `https://api.vkeys.cn/v2/music/tencent?word=晴天&n=1`;
+          try { const r = await fetchTimeout(testUrl, { headers: { "User-Agent": UA } }, 4500); return json({ ok: r.ok, status: r.status, ms: Date.now() - t0 }); }
           catch (e) { return json({ ok: false, error: e.message, ms: Date.now() - t0 }); }
         }
         return json({ error: "Unknown admin route" }, 404);
@@ -439,7 +392,6 @@ export default {
         const target = url.searchParams.get("u") || "", src = url.searchParams.get("src") || "";
         if (!isSafeExternalUrl(target)) return json({ error: "invalid stream url" }, 400);
         const fwdHeaders = new Headers({ "User-Agent": UA });
-        if (src === "bili" || target.includes("bilivideo")) fwdHeaders.set("Referer", "https://www.bilibili.com/");
         if (src.includes("kuwo") || target.includes("kuwo")) fwdHeaders.set("Referer", "https://www.kuwo.cn/");
         const range = request.headers.get("Range"); if (range) fwdHeaders.set("Range", range);
         const upstream = await fetch(target, { headers: fwdHeaders, redirect: "follow" });
@@ -470,20 +422,47 @@ export default {
         return json({ chart: { id: chart.id, title: chart.title, cover: chart.cover, description: chart.description }, songs: ids.map((sid) => map.get(sid)).filter(Boolean) });
       }
       if (path === "/api/artist") {
-        const name = (url.searchParams.get("name") || "").trim(); if (!name) return json({ songs: [] });
-        const { results: localRows } = await env.DB.prepare("SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND artist LIKE ? ORDER BY score DESC LIMIT 40").bind(`%${name}%`).all();
-        const seen = new Set((localRows || []).map((r) => r.norm_key));
-        const live = await liveSearchSongs(name, 35), nameLower = name.toLowerCase();
-        return json({ artist: name, songs: [...(localRows || []), ...live.filter((s) => !seen.has(s.norm_key) && (s.artist.toLowerCase().includes(nameLower) || nameLower.includes(s.artist.toLowerCase())))].slice(0, 60) });
+        const name = (url.searchParams.get("name") || "").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
+        if (!name) return json({ songs: [], albums: [] });
+        let localRows = [];
+        if (page === 1) {
+          localRows = (await env.DB.prepare("SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND artist LIKE ? ORDER BY score DESC LIMIT 50").bind(`%${name}%`).all()).results || [];
+        }
+        const seen = new Set(localRows.map((r) => r.norm_key));
+        const [live, albums] = await Promise.all([
+          liveSearchSongs(name, 50, page),
+          page === 1 ? liveSearchAlbums(name, 20, 1) : Promise.resolve([]),
+        ]);
+        const nameLower = name.toLowerCase();
+        const filtered = live.filter((s) => !seen.has(s.norm_key) && (s.artist.toLowerCase().includes(nameLower) || nameLower.includes(s.artist.toLowerCase())));
+        return json({ artist: name, page, hasMore: live.length >= 35, songs: [...localRows, ...filtered], albums });
+      }
+      if (path === "/api/albums") {
+        const q = (url.searchParams.get("q") || "华语经典").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
+        const albums = await liveSearchAlbums(q, 24, page);
+        return json({ albums, hasMore: albums.length >= 20 });
+      }
+      if (path === "/api/album") {
+        const id = (url.searchParams.get("id") || "").trim(); if (!id) return json({ error: "missing id" }, 400);
+        const d = await (await fetchTimeout(`https://music.163.com/api/album/${id}`, { headers: NE_HEADERS }, 5000)).json();
+        const alb = d?.album || {}, songs = (d?.songs || []).map((s) => {
+          const artists = (s.ar || s.artists || []).map((a) => a.name).filter(Boolean).join(" / ") || alb.artist?.name || "未知歌手";
+          return { id: 0, norm_key: makeNormKey(s.name, artists), title: s.name, artist: artists, album: alb.name || "", cover: alb.picUrl || s.al?.picUrl || "", duration: Math.round((s.dt || s.duration || 0) / 1000), category: "专辑", ext_source: "netease", ext_id: String(s.id) };
+        });
+        return json({ album: { id, title: alb.name || "", cover: alb.picUrl || "", artist: alb.artist?.name || "", description: (alb.description || "").slice(0, 120) }, songs });
       }
       if (path === "/api/search") {
-        const q = (url.searchParams.get("q") || "").trim(); if (!q) return json({ songs: [] });
+        const q = (url.searchParams.get("q") || "").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
+        if (!q) return json({ songs: [] });
         let localRows = [];
-        if (q.length >= 3) localRows = (await env.DB.prepare(`SELECT s.id,s.norm_key,s.title,s.artist,s.album,s.cover,s.duration,s.category,s.source_ids_json FROM songs_fts f JOIN songs s ON s.id = f.rowid WHERE songs_fts MATCH ? AND s.is_blocked = 0 ORDER BY s.score DESC LIMIT 30`).bind(`"${q.replace(/"/g, "")}"`).all()).results || [];
-        if (!localRows.length) localRows = (await env.DB.prepare("SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND (title LIKE ? OR artist LIKE ?) ORDER BY score DESC LIMIT 25").bind(`%${q}%`, `%${q}%`).all()).results || [];
-        const merged = [...localRows];
-        if (merged.length < 15) { const seen = new Set(merged.map((r) => r.norm_key)); for (const item of await liveSearchSongs(q, 30)) if (!seen.has(item.norm_key)) { seen.add(item.norm_key); merged.push(item); } }
-        return json({ songs: merged.slice(0, 50) });
+        if (page === 1) {
+          if (q.length >= 3) localRows = (await env.DB.prepare(`SELECT s.id,s.norm_key,s.title,s.artist,s.album,s.cover,s.duration,s.category,s.source_ids_json FROM songs_fts f JOIN songs s ON s.id = f.rowid WHERE songs_fts MATCH ? AND s.is_blocked = 0 ORDER BY s.score DESC LIMIT 30`).bind(`"${q.replace(/"/g, "")}"`).all()).results || [];
+          if (!localRows.length) localRows = (await env.DB.prepare("SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND (title LIKE ? OR artist LIKE ?) ORDER BY score DESC LIMIT 25").bind(`%${q}%`, `%${q}%`).all()).results || [];
+        }
+        const merged = [...localRows], seen = new Set(merged.map((r) => r.norm_key));
+        const live = await liveSearchSongs(q, 40, page);
+        for (const item of live) if (!seen.has(item.norm_key)) { seen.add(item.norm_key); merged.push(item); }
+        return json({ page, hasMore: live.length >= 30, songs: merged });
       }
       if (path === "/api/song") {
         const id = Number(url.searchParams.get("id") || 0);
@@ -503,7 +482,7 @@ export default {
       }
       if (path === "/api/play") {
         let id = Number(url.searchParams.get("id") || 0);
-        const quality = url.searchParams.get("q") || "high", prefer = url.searchParams.get("prefer") || "", force = url.searchParams.get("force") === "1";
+        const quality = url.searchParams.get("q") || "high", prefer = url.searchParams.get("prefer") || "", skip = url.searchParams.get("skip") || "", force = url.searchParams.get("force") === "1";
         let song = id > 0 ? await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first() : null;
         if (!song && id === 0) {
           const title = (url.searchParams.get("title") || "").trim(), artist = (url.searchParams.get("artist") || "").trim();
@@ -518,21 +497,19 @@ export default {
           if (song) id = song.id;
         }
         if (!song) return json({ error: "not found" }, 404);
-        const cache = caches.default, cacheKey = new Request(`https://cache.internal/play/${id}/${quality}/${prefer || "auto"}`);
+        const cache = caches.default, cacheKey = new Request(`https://cache.internal/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
         if (!force) { const cached = await cache.match(cacheKey); if (cached) return cached; }
 
-        const resolved = await resolvePlayUrl(song, quality, env, prefer);
+        const resolved = await resolvePlayUrl(song, quality, env, prefer, skip);
         if (resolved.error) return json(resolved, 502);
 
         const needProxy = Boolean(resolved.needProxy || resolved.url.startsWith("http://"));
         const token = getTokenFromReq(request);
         const proxyUrl = `${url.origin}/api/stream?u=${encodeURIComponent(resolved.url)}&src=${encodeURIComponent(resolved.source || "")}&token=${encodeURIComponent(token || "")}`;
 
-        if (resolved.bvid || resolved.kuwoId) {
-          const ids = JSON.parse(song.source_ids_json || "{}"); let changed = false;
-          if (resolved.bvid && !ids.bili) { ids.bili = resolved.bvid; changed = true; }
-          if (resolved.kuwoId && !ids.kuwo) { ids.kuwo = resolved.kuwoId; changed = true; }
-          if (changed) ctx.waitUntil(env.DB.prepare("UPDATE songs SET source_ids_json = ? WHERE id = ?").bind(JSON.stringify(ids), id).run());
+        if (resolved.kuwoId) {
+          const ids = JSON.parse(song.source_ids_json || "{}");
+          if (!ids.kuwo) { ids.kuwo = resolved.kuwoId; ctx.waitUntil(env.DB.prepare("UPDATE songs SET source_ids_json = ? WHERE id = ?").bind(JSON.stringify(ids), id).run()); }
         }
 
         const resp = json({ ...resolved, needProxy, songId: id, proxyUrl }, 200, { "Cache-Control": "public, max-age=900" });
@@ -542,11 +519,11 @@ export default {
 
       if (path === "/api/mf-plugin.js") {
         const base = `${url.protocol}//${url.host}`;
-        return new Response(`"use strict";const axios=require("axios");const BASE="${base}";const TOKEN="${env.ACCESS_TOKEN||""}";const H=TOKEN?{"X-Access-Token":TOKEN}:{};module.exports={platform:"MusicHub·自建云端",author:"MusicHub",version:"1.4.0",cacheControl:"no-cache",supportedSearchType:["music"],async search(q,p,t){if(t!=="music"||p>1)return{isEnd:true,data:[]};const{data}=await axios.get(BASE+"/api/search",{params:{q},headers:H,timeout:10000});return{isEnd:true,data:(data.songs||[]).map(s=>({id:String(s.id||0),title:s.title,artist:s.artist,album:s.album,artwork:s.cover,duration:s.duration,ext_source:s.ext_source||"",ext_id:s.ext_id||""}))};},async getMediaSource(item,q){const{data}=await axios.get(BASE+"/api/play",{params:{id:item.id||0,q:q||"high",ext_source:item.ext_source,ext_id:item.ext_id,title:item.title,artist:item.artist,album:item.album,cover:item.artwork,duration:item.duration},headers:H,timeout:14000});return{url:data.url,headers:data.headers};},async getLyric(item){const{data}=await axios.get(BASE+"/api/song",{params:{id:item.id||0,ext_source:item.ext_source,ext_id:item.ext_id,title:item.title,artist:item.artist},headers:H,timeout:8000});return{rawLrc:data.song?.lyric_lrc||"",translation:data.song?.lyric_trans||undefined};},async getTopLists(){const{data}=await axios.get(BASE+"/api/home",{headers:H,timeout:8000});const g={};for(const c of data.charts||[]){if(!g[c.category])g[c.category]=[];g[c.category].push({id:c.id,title:c.title,coverImg:c.cover,description:c.description});}return Object.entries(g).map(([title,data])=>({title,data}));},async getTopListDetail(tl){const{data}=await axios.get(BASE+"/api/chart",{params:{id:tl.id},headers:H,timeout:10000});return{isEnd:true,topListItem:tl,musicList:(data.songs||[]).map(s=>({id:String(s.id),title:s.title,artist:s.artist,album:s.album,artwork:s.cover,duration:s.duration}))};}};`, { headers: { "Content-Type": "application/javascript; charset=utf-8" } });
+        return new Response(`"use strict";const axios=require("axios");const BASE="${base}";const TOKEN="${env.ACCESS_TOKEN||""}";const H=TOKEN?{"X-Access-Token":TOKEN}:{};module.exports={platform:"MusicHub·自建云端",author:"MusicHub",version:"1.4.1",cacheControl:"no-cache",supportedSearchType:["music"],async search(q,p,t){if(t!=="music")return{isEnd:true,data:[]};const{data}=await axios.get(BASE+"/api/search",{params:{q,page:p},headers:H,timeout:10000});return{isEnd:!data.hasMore,data:(data.songs||[]).map(s=>({id:String(s.id||0),title:s.title,artist:s.artist,album:s.album,artwork:s.cover,duration:s.duration,ext_source:s.ext_source||"",ext_id:s.ext_id||""}))};},async getMediaSource(item,q){const{data}=await axios.get(BASE+"/api/play",{params:{id:item.id||0,q:q||"high",ext_source:item.ext_source,ext_id:item.ext_id,title:item.title,artist:item.artist,album:item.album,cover:item.artwork,duration:item.duration},headers:H,timeout:14000});return{url:data.url,headers:data.headers};},async getLyric(item){const{data}=await axios.get(BASE+"/api/song",{params:{id:item.id||0,ext_source:item.ext_source,ext_id:item.ext_id,title:item.title,artist:item.artist},headers:H,timeout:8000});return{rawLrc:data.song?.lyric_lrc||"",translation:data.song?.lyric_trans||undefined};},async getTopLists(){const{data}=await axios.get(BASE+"/api/home",{headers:H,timeout:8000});const g={};for(const c of data.charts||[]){if(!g[c.category])g[c.category]=[];g[c.category].push({id:c.id,title:c.title,coverImg:c.cover,description:c.description});}return Object.entries(g).map(([title,data])=>({title,data}));},async getTopListDetail(tl){const{data}=await axios.get(BASE+"/api/chart",{params:{id:tl.id},headers:H,timeout:10000});return{isEnd:true,topListItem:tl,musicList:(data.songs||[]).map(s=>({id:String(s.id),title:s.title,artist:s.artist,album:s.album,artwork:s.cover,duration:s.duration}))};}};`, { headers: { "Content-Type": "application/javascript; charset=utf-8" } });
       }
       if (path === "/musicfree.json") {
         const qs = env.ACCESS_TOKEN ? `?token=${encodeURIComponent(env.ACCESS_TOKEN)}` : "";
-        return json({ plugins: [{ name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/api/mf-plugin.js${qs}`, version: "1.4.0" }] });
+        return json({ plugins: [{ name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/api/mf-plugin.js${qs}`, version: "1.4.1" }] });
       }
       return json({ error: "Not Found" }, 404);
     } catch (err) {
