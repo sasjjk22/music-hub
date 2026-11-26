@@ -1,5 +1,5 @@
 name = "music-hub"
-main = "src/worker.js"
+main = "SRC/worker.js"
 compatibility_date = "2026-11-25"
 
 [[d1_databases]]
