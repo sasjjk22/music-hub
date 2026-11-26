@@ -1,6 +1,43 @@
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
+const NE_HEADERS = {
+  "User-Agent": UA,
+  Referer: "https://music.163.com/",
+  Cookie: "os=pc; appver=2.9.7",
+};
+
+// 主页预设热门歌手（点击即融合本地 D1 + 全网实时拉取代表作）
+const PRESET_ARTISTS = [
+  { name: "周杰伦", cat: "华语男", tag: "华语流行" },
+  { name: "张学友", cat: "华语男", tag: "经典歌神" },
+  { name: "陈奕迅", cat: "华语男", tag: "华语流行" },
+  { name: "林俊杰", cat: "华语男", tag: "华语流行" },
+  { name: "陶喆", cat: "华语男", tag: "R&B" },
+  { name: "王力宏", cat: "华语男", tag: "华语流行" },
+  { name: "薛之谦", cat: "华语男", tag: "流行情歌" },
+  { name: "许嵩", cat: "华语男", tag: "原创" },
+  { name: "毛不易", cat: "华语男", tag: "民谣流行" },
+  { name: "邓紫棋", cat: "华语女", tag: "华语流行" },
+  { name: "王菲", cat: "华语女", tag: "经典天后" },
+  { name: "孙燕姿", cat: "华语女", tag: "华语经典" },
+  { name: "梁静茹", cat: "华语女", tag: "情歌" },
+  { name: "田馥甄", cat: "华语女", tag: "文艺流行" },
+  { name: "蔡依林", cat: "华语女", tag: "唱跳流行" },
+  { name: "五月天", cat: "乐队组合", tag: "摇滚乐团" },
+  { name: "Beyond", cat: "乐队组合", tag: "粤语经典" },
+  { name: "告五人", cat: "乐队组合", tag: "独立乐团" },
+  { name: "YOASOBI", cat: "日韩", tag: "日语流行" },
+  { name: "米津玄师", cat: "日韩", tag: "日语创作" },
+  { name: "Aimer", cat: "ACG", tag: "动漫歌姬" },
+  { name: "泽野弘之", cat: "ACG", tag: "燃系OST" },
+  { name: "塞壬唱片-MSR", cat: "ACG", tag: "明日方舟" },
+  { name: "Taylor Swift", cat: "欧美", tag: "欧美流行" },
+  { name: "Coldplay", cat: "欧美", tag: "英伦摇滚" },
+];
+
+const JUNK_WORDS = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版"];
+
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
@@ -36,8 +73,7 @@ function checkToken(request, env) {
 
 function checkAdmin(request, env) {
   if (!env.ADMIN_PASSWORD) return false;
-  const pwd = request.headers.get("X-Admin-Password") || "";
-  return pwd === env.ADMIN_PASSWORD;
+  return (request.headers.get("X-Admin-Password") || "") === env.ADMIN_PASSWORD;
 }
 
 function normalizeName(s) {
@@ -48,7 +84,98 @@ function normalizeName(s) {
     .trim();
 }
 
-// 音频流防假链 / 防 30 秒试听 / 防提示音校验
+function makeNormKey(title, artist) {
+  const first = (artist || "").split(/[/,、&]/)[0];
+  return `${normalizeName(title)}|${normalizeName(first)}`;
+}
+
+function isJunkTitle(title, query = "") {
+  const t = (title || "").toLowerCase();
+  const q = (query || "").toLowerCase();
+  return JUNK_WORDS.some((w) => t.includes(w) && !q.includes(w));
+}
+
+// ---------- 全网实时搜索（供长尾搜歌 + 歌手详情页使用） ----------
+async function liveSearchSongs(query, limit = 30) {
+  const out = [];
+  const seen = new Set();
+
+  // 1. 网易云官方搜索（先试 cloudsearch 拿高清封面，失败则退回 api/search/get）
+  for (const endpoint of [
+    `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(query)}&type=1&limit=${limit}&offset=0`,
+    `https://music.163.com/api/search/get?s=${encodeURIComponent(query)}&type=1&limit=${limit}&offset=0`,
+  ]) {
+    try {
+      const r = await fetch(endpoint, { headers: NE_HEADERS });
+      if (!r.ok) continue;
+      const data = await r.json();
+      const songs = data?.result?.songs || [];
+      if (!songs.length) continue;
+      for (const s of songs) {
+        if (!s.name || isJunkTitle(s.name, query)) continue;
+        const artists = (s.ar || s.artists || []).map((a) => a.name).filter(Boolean).join(" / ") || "未知歌手";
+        const nk = makeNormKey(s.name, artists);
+        if (seen.has(nk)) continue;
+        seen.add(nk);
+        const alb = s.al || s.album || {};
+        out.push({
+          id: 0,
+          norm_key: nk,
+          title: s.name,
+          artist: artists,
+          album: alb.name || "",
+          cover: alb.picUrl || "",
+          duration: Math.round((s.dt || s.duration || 0) / 1000),
+          category: "全网搜索",
+          ext_source: "netease",
+          ext_id: String(s.id),
+        });
+      }
+      if (out.length) break;
+    } catch {}
+  }
+
+  // 2. 若网易云未命中或被风控，自动补全 gdstudio 聚合搜索（网易 + 酷我）
+  if (out.length < 5) {
+    try {
+      const r = await fetch(
+        `https://music-api.gdstudio.xyz/api.php?types=search&source=netease,kuwo&name=${encodeURIComponent(query)}&count=20&pages=1`,
+        { headers: { "User-Agent": UA } }
+      );
+      if (r.ok) {
+        const arr = await r.json();
+        if (Array.isArray(arr)) {
+          for (const item of arr) {
+            if (!item.name || isJunkTitle(item.name, query)) continue;
+            const artists = Array.isArray(item.artist) ? item.artist.join(" / ") : item.artist || "未知歌手";
+            const nk = makeNormKey(item.name, artists);
+            if (seen.has(nk)) continue;
+            seen.add(nk);
+            const src = item.source || "netease";
+            out.push({
+              id: 0,
+              norm_key: nk,
+              title: item.name,
+              artist: artists,
+              album: item.album || "",
+              cover: item.pic_id
+                ? `https://music-api.gdstudio.xyz/api.php?types=pic&source=${src}&id=${item.pic_id}&size=500`
+                : "",
+              duration: 0,
+              category: src === "kuwo" ? "酷我" : "全网搜索",
+              ext_source: src,
+              ext_id: String(item.id),
+            });
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return out;
+}
+
+// ---------- 音频防假链 / 30秒试听防火墙 ----------
 async function verifyAudioUrl(url, sizeKb, durationSec) {
   if (!url || !url.startsWith("http") || url.includes("panspace.kuwo.cn")) return false;
   if (sizeKb && durationSec >= 90 && Number(sizeKb) < 550) return false;
@@ -59,7 +186,6 @@ async function verifyAudioUrl(url, sizeKb, durationSec) {
     if (res.status !== 200 && res.status !== 206) return false;
     const ct = (res.headers.get("content-type") || "").toLowerCase();
     if (ct.includes("text/html") || ct.includes("application/json")) return false;
-    // 检查 Content-Range 总字节数防 30 秒试听截断
     const cr = res.headers.get("content-range") || "";
     const m = cr.match(/\/(\d+)$/);
     if (m && durationSec >= 90) {
@@ -186,19 +312,16 @@ async function resolvePlayUrl(song, quality, env, prefer = "") {
   };
   const brs = brMap[quality] || brMap.high;
 
-  // 允许播放器主动指定强制切到 B站兜底
   if (prefer === "bili") {
     const bili = await resolveBilibili(song.title, song.artist, song.duration, ids.bili);
     if (bili) return bili;
   }
 
-  // 1. R2 私有绝版无损最高优
   if (ids.r2 && env.R2) {
     const base = env.R2_PUBLIC_URL || "";
     if (base) return { url: `${base.replace(/\/$/, "")}/${ids.r2}`, source: "r2" };
   }
 
-  // 2. 塞壬唱片官方无损直连
   if (ids.msr) {
     try {
       const r = await fetch(`https://monster-siren.hypergryph.com/api/song/${ids.msr}`);
@@ -207,7 +330,6 @@ async function resolvePlayUrl(song, quality, env, prefer = "") {
     } catch {}
   }
 
-  // 3. D1 动态解析池（先直匹配已有 ID，再按歌名+歌手跨平台换源）
   const { results: sources } = await env.DB.prepare(
     "SELECT id, type, endpoint FROM sources WHERE enabled = 1 AND type = 'agg' ORDER BY priority ASC"
   ).all();
@@ -218,7 +340,6 @@ async function resolvePlayUrl(song, quality, env, prefer = "") {
       const hit = await tryAggEndpoint(src.endpoint, src.id, plat, pid, brs, song.duration);
       if (hit) return hit;
     }
-    // 跨平台搜歌换源（尝试 kuwo / netease / joox）
     const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
     const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
     for (const plat of ["kuwo", "netease", "joox"]) {
@@ -238,7 +359,6 @@ async function resolvePlayUrl(song, quality, env, prefer = "") {
     }
   }
 
-  // 4. 网易云免会员官方外链直试（带 30 秒试听拦截）
   if (ids.netease) {
     const outer = `https://music.163.com/song/media/outer/url?id=${ids.netease}.mp3`;
     try {
@@ -249,11 +369,34 @@ async function resolvePlayUrl(song, quality, env, prefer = "") {
     } catch {}
   }
 
-  // 5. B站 WBI 音频流终极兜底
   const bili = await resolveBilibili(song.title, song.artist, song.duration, ids.bili);
   if (bili) return bili;
 
   return null;
+}
+
+// 实时获取单曲歌词（并清洗广告行）
+async function fetchLiveLyric(extSource, extId, title, artist) {
+  if (extSource === "netease" && extId) {
+    try {
+      const r = await fetch(`https://music.163.com/api/song/lyric?id=${extId}&lv=-1&kv=-1&tv=-1`, { headers: NE_HEADERS });
+      const d = await r.json();
+      const lrc = d?.lrc?.lyric || "";
+      const trans = d?.tlyric?.lyric || "";
+      if (lrc) return { lrc, trans };
+    } catch {}
+  }
+  try {
+    const cleanArtist = (artist || "").split(/[/,、&]/)[0].trim();
+    const r = await fetch(
+      `https://lrclib.net/api/get?track_name=${encodeURIComponent(normalizeName(title))}&artist_name=${encodeURIComponent(cleanArtist)}`
+    );
+    if (r.ok) {
+      const d = await r.json();
+      return { lrc: d?.syncedLyrics || d?.plainLyrics || "", trans: "" };
+    }
+  } catch {}
+  return { lrc: "", trans: "" };
 }
 
 function isSafeExternalUrl(raw) {
@@ -289,10 +432,10 @@ export default {
       if (path === "/admin") return html(ADMIN_HTML);
       if (path === "/health") return json({ name: "Music Hub API", status: "ok", time: Date.now() });
 
-      // -------- 管理后台 API（ADMIN_PASSWORD 鉴权） --------
+      // -------- 管理后台 API --------
       if (path.startsWith("/api/admin/")) {
         if (!checkAdmin(request, env)) {
-          return json({ error: env.ADMIN_PASSWORD ? "后台密码错误" : "请先在 Cloudflare 后台配置 ADMIN_PASSWORD Secret" }, 401);
+          return json({ error: env.ADMIN_PASSWORD ? "后台密码错误" : "请先配置 ADMIN_PASSWORD Secret" }, 401);
         }
         if (path === "/api/admin/stats" && request.method === "GET") {
           const sCount = await env.DB.prepare("SELECT COUNT(*) AS c FROM songs WHERE is_blocked=0").first();
@@ -372,7 +515,7 @@ export default {
         return json({ error: "Unknown admin route" }, 404);
       }
 
-      // -------- 播放与订阅 API（ACCESS_TOKEN 鉴权） --------
+      // -------- 播放与订阅 API --------
       if (!checkToken(request, env)) {
         return json({ error: "Unauthorized" }, 401);
       }
@@ -381,7 +524,7 @@ export default {
         const { results } = await env.DB.prepare(
           "SELECT id, title, category, cover, description FROM charts ORDER BY sort_order ASC"
         ).all();
-        return json({ charts: results || [] });
+        return json({ charts: results || [], artists: PRESET_ARTISTS });
       }
 
       if (path === "/api/chart") {
@@ -392,7 +535,6 @@ export default {
         const ids = JSON.parse(chart.song_ids_json || "[]").slice(0, 160);
         if (!ids.length) return json({ chart, songs: [] });
 
-        // D1 单条 SQL 上限 100 参数，按每批 80 个分片查询
         const map = new Map();
         for (let i = 0; i < ids.length; i += 80) {
           const chunk = ids.slice(i, i + 80);
@@ -411,50 +553,146 @@ export default {
         });
       }
 
+      // 歌手专区：合并本地 D1 该歌手曲目 + 实时全网拉取代表作
+      if (path === "/api/artist") {
+        const name = (url.searchParams.get("name") || "").trim();
+        if (!name) return json({ songs: [] });
+
+        const likeQ = `%${name}%`;
+        const { results: localRows } = await env.DB.prepare(
+          `SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json
+           FROM songs WHERE is_blocked = 0 AND artist LIKE ?
+           ORDER BY score DESC LIMIT 40`
+        )
+          .bind(likeQ)
+          .all();
+
+        const seen = new Set((localRows || []).map((r) => r.norm_key));
+        const live = await liveSearchSongs(name, 35);
+        const nameLower = name.toLowerCase();
+        const filteredLive = live.filter((s) => {
+          if (seen.has(s.norm_key)) return false;
+          return s.artist.toLowerCase().includes(nameLower) || nameLower.includes(s.artist.toLowerCase());
+        });
+
+        return json({ artist: name, songs: [...(localRows || []), ...filteredLive].slice(0, 60) });
+      }
+
+      // 混合搜索：D1 精准检索 + 实时全网补充搜索
       if (path === "/api/search") {
         const q = (url.searchParams.get("q") || "").trim();
         if (!q) return json({ songs: [] });
-        let rows = [];
+
+        let localRows = [];
         if (q.length >= 3) {
           const safeQ = `"${q.replace(/"/g, "")}"`;
           const res = await env.DB.prepare(
             `SELECT s.id,s.norm_key,s.title,s.artist,s.album,s.cover,s.duration,s.category,s.source_ids_json
              FROM songs_fts f JOIN songs s ON s.id = f.rowid
              WHERE songs_fts MATCH ? AND s.is_blocked = 0
-             ORDER BY s.score DESC LIMIT 50`
+             ORDER BY s.score DESC LIMIT 30`
           )
             .bind(safeQ)
             .all();
-          rows = res.results || [];
+          localRows = res.results || [];
         }
-        if (!rows.length) {
+        if (!localRows.length) {
           const likeQ = `%${q}%`;
           const res = await env.DB.prepare(
             `SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json
              FROM songs WHERE is_blocked = 0 AND (title LIKE ? OR artist LIKE ?)
-             ORDER BY score DESC LIMIT 40`
+             ORDER BY score DESC LIMIT 25`
           )
             .bind(likeQ, likeQ)
             .all();
-          rows = res.results || [];
+          localRows = res.results || [];
         }
-        return json({ songs: rows });
+
+        // 若本地 D1 结果不足 15 首，自动实时搜索全网（网易云 + 酷我）补全
+        let merged = [...localRows];
+        if (merged.length < 15) {
+          const seen = new Set(merged.map((r) => r.norm_key));
+          const live = await liveSearchSongs(q, 30);
+          for (const item of live) {
+            if (!seen.has(item.norm_key)) {
+              seen.add(item.norm_key);
+              merged.push(item);
+            }
+          }
+        }
+        return json({ songs: merged.slice(0, 50) });
       }
 
       if (path === "/api/song") {
-        const id = Number(url.searchParams.get("id"));
-        if (!id) return json({ error: "invalid id" }, 400);
-        const song = await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first();
-        if (!song) return json({ error: "not found" }, 404);
-        return json({ song });
+        const id = Number(url.searchParams.get("id") || 0);
+        if (id > 0) {
+          const song = await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first();
+          if (song) {
+            if (!song.lyric_lrc) {
+              const ids = JSON.parse(song.source_ids_json || "{}");
+              const extSrc = ids.netease ? "netease" : "";
+              const extId = ids.netease || "";
+              const live = await fetchLiveLyric(extSrc, extId, song.title, song.artist);
+              if (live.lrc) {
+                song.lyric_lrc = live.lrc;
+                song.lyric_trans = live.trans;
+                ctx.waitUntil(
+                  env.DB.prepare("UPDATE songs SET lyric_lrc = ?, lyric_trans = ? WHERE id = ?")
+                    .bind(live.lrc, live.trans, id)
+                    .run()
+                );
+              }
+            }
+            return json({ song });
+          }
+        }
+        // 未入库歌曲实时取歌词
+        const extSource = url.searchParams.get("ext_source") || "";
+        const extId = url.searchParams.get("ext_id") || "";
+        const title = url.searchParams.get("title") || "";
+        const artist = url.searchParams.get("artist") || "";
+        const live = await fetchLiveLyric(extSource, extId, title, artist);
+        return json({ song: { id: 0, title, artist, lyric_lrc: live.lrc, lyric_trans: live.trans } });
       }
 
       if (path === "/api/play") {
-        const id = Number(url.searchParams.get("id"));
+        let id = Number(url.searchParams.get("id") || 0);
         const quality = url.searchParams.get("q") || "high";
         const prefer = url.searchParams.get("prefer") || "";
         const force = url.searchParams.get("force") === "1";
-        if (!id) return json({ error: "invalid id" }, 400);
+
+        let song = null;
+        if (id > 0) {
+          song = await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first();
+        } else {
+          // 实时搜索到的新歌：点播时自动按 norm_key 懒入库到 D1，越听曲库越全！
+          const title = (url.searchParams.get("title") || "").trim();
+          const artist = (url.searchParams.get("artist") || "").trim();
+          const album = (url.searchParams.get("album") || "").trim();
+          const cover = (url.searchParams.get("cover") || "").trim();
+          const duration = Number(url.searchParams.get("duration") || 0);
+          const extSource = url.searchParams.get("ext_source") || "";
+          const extId = url.searchParams.get("ext_id") || "";
+          if (!title) return json({ error: "invalid song" }, 400);
+
+          const nk = makeNormKey(title, artist);
+          song = await env.DB.prepare("SELECT * FROM songs WHERE norm_key = ?").bind(nk).first();
+          if (!song) {
+            const idsObj = extSource && extId ? { [extSource]: extId } : {};
+            const now = Math.floor(Date.now() / 1000);
+            await env.DB.prepare(
+              `INSERT INTO songs (norm_key,title,artist,album,cover,duration,category,tags,score,source_ids_json,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(norm_key) DO NOTHING`
+            )
+              .bind(nk, title, artist || "未知歌手", album, cover, duration, "点播收藏", "", 300, JSON.stringify(idsObj), now)
+              .run();
+            song = await env.DB.prepare("SELECT * FROM songs WHERE norm_key = ?").bind(nk).first();
+          }
+          if (song) id = song.id;
+        }
+
+        if (!song) return json({ error: "not found" }, 404);
 
         const cache = caches.default;
         const cacheKey = new Request(`https://cache.internal/play/${id}/${quality}/${prefer || "auto"}`);
@@ -462,9 +700,6 @@ export default {
           const cached = await cache.match(cacheKey);
           if (cached) return cached;
         }
-
-        const song = await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first();
-        if (!song) return json({ error: "not found" }, 404);
 
         const resolved = await resolvePlayUrl(song, quality, env, prefer);
         if (!resolved) return json({ error: "暂无可播放的完整音源" }, 502);
@@ -484,13 +719,12 @@ export default {
           }
         }
 
-        const payload = { ...resolved, proxyUrl };
+        const payload = { ...resolved, songId: id, proxyUrl };
         const resp = json(payload, 200, { "Cache-Control": "public, max-age=900" });
         ctx.waitUntil(cache.put(cacheKey, resp.clone()));
         return resp;
       }
 
-      // 音频流轻量透传代理（带 Range 支持，专门解决浏览器 PWA 播放 B站音频 Referer 403）
       if (path === "/api/stream") {
         const target = url.searchParams.get("u") || "";
         if (!isSafeExternalUrl(target)) return json({ error: "invalid stream url" }, 400);
@@ -523,25 +757,32 @@ const H = TOKEN ? { "X-Access-Token": TOKEN } : {};
 module.exports = {
   platform: "MusicHub·自建云端",
   author: "MusicHub",
-  version: "1.1.0",
+  version: "1.2.0",
   cacheControl: "no-cache",
   supportedSearchType: ["music"],
   async search(query, page, type) {
     if (type !== "music" || page > 1) return { isEnd: true, data: [] };
-    const { data } = await axios.get(BASE + "/api/search", { params: { q: query }, headers: H, timeout: 8000 });
+    const { data } = await axios.get(BASE + "/api/search", { params: { q: query }, headers: H, timeout: 10000 });
     return {
       isEnd: true,
       data: (data.songs || []).map((s) => ({
-        id: String(s.id), title: s.title, artist: s.artist, album: s.album, artwork: s.cover, duration: s.duration
+        id: String(s.id || 0), title: s.title, artist: s.artist, album: s.album, artwork: s.cover, duration: s.duration,
+        ext_source: s.ext_source || "", ext_id: s.ext_id || ""
       }))
     };
   },
   async getMediaSource(item, quality) {
-    const { data } = await axios.get(BASE + "/api/play", { params: { id: item.id, q: quality || "high" }, headers: H, timeout: 14000 });
+    const { data } = await axios.get(BASE + "/api/play", {
+      params: { id: item.id || 0, q: quality || "high", ext_source: item.ext_source, ext_id: item.ext_id, title: item.title, artist: item.artist, album: item.album, cover: item.artwork, duration: item.duration },
+      headers: H, timeout: 14000
+    });
     return { url: data.url, headers: data.headers };
   },
   async getLyric(item) {
-    const { data } = await axios.get(BASE + "/api/song", { params: { id: item.id }, headers: H, timeout: 6000 });
+    const { data } = await axios.get(BASE + "/api/song", {
+      params: { id: item.id || 0, ext_source: item.ext_source, ext_id: item.ext_id, title: item.title, artist: item.artist },
+      headers: H, timeout: 8000
+    });
     return { rawLrc: data.song?.lyric_lrc || "", translation: data.song?.lyric_trans || undefined };
   },
   async getTopLists() {
@@ -571,7 +812,7 @@ module.exports = {
         const base = `${url.protocol}//${url.host}`;
         const qs = env.ACCESS_TOKEN ? `?token=${encodeURIComponent(env.ACCESS_TOKEN)}` : "";
         return json({
-          plugins: [{ name: "MusicHub·自建云端", url: `${base}/api/mf-plugin.js${qs}`, version: "1.1.0" }],
+          plugins: [{ name: "MusicHub·自建云端", url: `${base}/api/mf-plugin.js${qs}`, version: "1.2.0" }],
         });
       }
 
@@ -587,6 +828,7 @@ const PLAYER_HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
+<meta name="referrer" content="no-referrer" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -601,8 +843,17 @@ const PLAYER_HTML = `<!DOCTYPE html>
   input{width:100%;background:var(--card);border:1px solid rgba(255,255,255,.1);color:var(--text);padding:8px 12px;border-radius:10px;font-size:14px;outline:none;}
   button{background:var(--acc);color:#06121f;border:none;padding:8px 14px;border-radius:10px;font-weight:600;cursor:pointer;font-size:13px;white-space:nowrap;}
   button.ghost{background:rgba(255,255,255,.08);color:var(--text);}
+  button.pill{padding:5px 12px;border-radius:20px;font-size:12px;background:rgba(255,255,255,.07);color:var(--muted);}
+  button.pill.active{background:var(--acc);color:#06121f;}
   main{max-width:980px;margin:0 auto;padding:16px;}
-  .section-title{font-size:15px;font-weight:700;margin:14px 0 10px;color:#cbd5e1;display:flex;justify-content:space-between;align-items:center;}
+  .section-title{font-size:15px;font-weight:700;margin:16px 0 10px;color:#cbd5e1;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;}
+  .pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
+  .artists{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:10px;margin-bottom:22px;}
+  .artist-card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:12px 8px;text-align:center;cursor:pointer;transition:transform .15s;}
+  .artist-card:active{transform:scale(.96);}
+  .avatar{width:54px;height:54px;border-radius:50%;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:19px;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.3);}
+  .artist-card .an{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .artist-card .at{font-size:11px;color:var(--muted);margin-top:2px;}
   .charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;}
   .chart-card{background:var(--card);border-radius:14px;overflow:hidden;cursor:pointer;border:1px solid rgba(255,255,255,.05);transition:transform .15s;}
   .chart-card:active{transform:scale(.97);}
@@ -640,7 +891,7 @@ const PLAYER_HTML = `<!DOCTYPE html>
 <header>
   <div class="brand" onclick="goHome()" style="cursor:pointer;">Music Hub</div>
   <div class="search">
-    <input id="qInput" placeholder="搜歌名 / 歌手..." onkeydown="if(event.key==='Enter')doSearch()" />
+    <input id="qInput" placeholder="搜全网歌名 / 歌手（如 张学友）..." onkeydown="if(event.key==='Enter')doSearch()" />
     <button onclick="doSearch()">搜索</button>
   </div>
   <button class="ghost" onclick="openTimer()">定时</button>
@@ -651,7 +902,7 @@ const PLAYER_HTML = `<!DOCTYPE html>
 
 <div class="player-bar" id="pBar" style="display:none;">
   <div class="p-top">
-    <img id="pCover" class="p-cover" src="" onclick="toggleLyricModal(true)" />
+    <img id="pCover" class="p-cover" referrerpolicy="no-referrer" src="" onclick="toggleLyricModal(true)" />
     <div class="p-info" onclick="toggleLyricModal(true)">
       <div class="st" id="pTitle">未播放</div>
       <div class="sa" id="pArtist">点击选歌开始播放</div>
@@ -691,11 +942,20 @@ var TOKEN = new URLSearchParams(location.search).get("token") || localStorage.ge
 if (new URLSearchParams(location.search).get("token")) localStorage.setItem("mh_token", TOKEN);
 
 var chartsCache = [];
+var artistsCache = [];
+var artistCat = "全部";
 var queue = [];
 var curIdx = -1;
 var lrcRows = [];
 var timerId = null;
 var audio = document.getElementById("audio");
+var GRADS = [
+  "linear-gradient(135deg,#0284c7,#6366f1)",
+  "linear-gradient(135deg,#db2777,#f43f5e)",
+  "linear-gradient(135deg,#059669,#10b981)",
+  "linear-gradient(135deg,#d97706,#f59e0b)",
+  "linear-gradient(135deg,#7c3aed,#a855f7)"
+];
 
 function api(path) {
   var sep = path.indexOf("?") >= 0 ? "&" : "?";
@@ -720,19 +980,54 @@ function saveToken() {
 }
 
 function goHome() {
-  document.getElementById("app").innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted);">加载榜单中...</div>';
+  document.getElementById("app").innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted);">加载主页中...</div>';
   api("/api/home").then(function(d) {
     chartsCache = d.charts || [];
-    var html = '<div class="section-title"><span>全网精选榜单</span><span class="badge">' + chartsCache.length + ' 个榜单</span></div><div class="charts">';
-    for (var i = 0; i < chartsCache.length; i++) {
-      var c = chartsCache[i];
-      html += '<div class="chart-card" onclick="openChart(\\'' + c.id + '\\')">' +
-        '<img loading="lazy" src="' + (c.cover || "") + '" />' +
-        '<div class="info"><div class="t">' + esc(c.title) + '</div><div class="c">' + esc(c.category) + '</div></div></div>';
-    }
-    html += '</div>';
-    document.getElementById("app").innerHTML = html;
+    artistsCache = d.artists || [];
+    renderHome();
   }).catch(function(){});
+}
+
+function setArtistCat(cat) {
+  artistCat = cat;
+  renderHome();
+}
+
+function renderHome() {
+  var cats = ["全部", "华语男", "华语女", "乐队组合", "日韩", "欧美", "ACG"];
+  var html = '<div class="section-title"><span>热门歌手</span><span class="badge">点击听代表作</span></div><div class="pills">';
+  for (var k = 0; k < cats.length; k++) {
+    html += '<button class="pill' + (artistCat === cats[k] ? " active" : "") + '" onclick="setArtistCat(\\'' + cats[k] + '\\')">' + cats[k] + '</button>';
+  }
+  html += '</div><div class="artists">';
+  var idx = 0;
+  for (var a = 0; a < artistsCache.length; a++) {
+    var ar = artistsCache[a];
+    if (artistCat !== "全部" && ar.cat !== artistCat) continue;
+    var g = GRADS[idx % GRADS.length];
+    idx++;
+    html += '<div class="artist-card" onclick="openArtist(\\'' + escAttr(ar.name) + '\\')">' +
+      '<div class="avatar" style="background:' + g + '">' + esc(ar.name.slice(0, 1)) + '</div>' +
+      '<div class="an">' + esc(ar.name) + '</div><div class="at">' + esc(ar.tag) + '</div></div>';
+  }
+  html += '</div>';
+
+  html += '<div class="section-title"><span>全网精选榜单</span><span class="badge">' + chartsCache.length + ' 个榜单</span></div><div class="charts">';
+  for (var i = 0; i < chartsCache.length; i++) {
+    var c = chartsCache[i];
+    html += '<div class="chart-card" onclick="openChart(\\'' + c.id + '\\')">' +
+      '<img loading="lazy" referrerpolicy="no-referrer" src="' + (c.cover || "") + '" />' +
+      '<div class="info"><div class="t">' + esc(c.title) + '</div><div class="c">' + esc(c.category) + '</div></div></div>';
+  }
+  html += '</div>';
+  document.getElementById("app").innerHTML = html;
+}
+
+function openArtist(name) {
+  document.getElementById("app").innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted);">正在检索 ' + esc(name) + ' 代表作...</div>';
+  api("/api/artist?name=" + encodeURIComponent(name)).then(function(d) {
+    renderSongs("歌手 · " + name, d.songs || [], true);
+  });
 }
 
 function openChart(id) {
@@ -745,7 +1040,7 @@ function openChart(id) {
 function doSearch() {
   var q = document.getElementById("qInput").value.trim();
   if (!q) return goHome();
-  document.getElementById("app").innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted);">搜索中...</div>';
+  document.getElementById("app").innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted);">全网搜索中...</div>';
   api("/api/search?q=" + encodeURIComponent(q)).then(function(d) {
     renderSongs("搜索: " + q, d.songs || [], true);
   });
@@ -754,13 +1049,13 @@ function doSearch() {
 function renderSongs(heading, songs, showBack) {
   queue = songs;
   var html = '<div class="section-title"><span>' + esc(heading) + ' (' + songs.length + ')</span>' +
-    (showBack ? '<button class="ghost" onclick="goHome()">返回榜单</button>' : '') + '</div><div class="songs">';
+    (showBack ? '<button class="ghost" onclick="goHome()">返回主页</button>' : '') + '</div><div class="songs">';
   if (!songs.length) html += '<div style="padding:30px;text-align:center;color:var(--muted);">暂无歌曲</div>';
   for (var i = 0; i < songs.length; i++) {
     var s = songs[i];
-    var act = (curIdx >= 0 && queue[curIdx] && queue[curIdx].id === s.id) ? " active" : "";
+    var act = (curIdx >= 0 && queue[curIdx] && queue[curIdx].norm_key === s.norm_key) ? " active" : "";
     html += '<div class="song-row' + act + '" onclick="playIndex(' + i + ')">' +
-      '<img loading="lazy" src="' + (s.cover || "") + '" />' +
+      '<img loading="lazy" referrerpolicy="no-referrer" src="' + (s.cover || "") + '" />' +
       '<div class="meta"><div class="st">' + esc(s.title) + '</div>' +
       '<div class="sa">' + esc(s.artist) + (s.album ? " · " + esc(s.album) : "") + '</div></div>' +
       '<span class="badge">' + esc(s.category || "") + '</span></div>';
@@ -780,12 +1075,22 @@ function playIndex(idx, prefer) {
   document.getElementById("mTitle").textContent = s.title;
   document.getElementById("mArtist").textContent = s.artist;
 
-  var qUrl = "/api/play?id=" + s.id + "&q=high" + (prefer ? "&prefer=" + prefer + "&force=1" : "");
+  var qUrl = "/api/play?id=" + (s.id || 0) + "&q=high" +
+    "&ext_source=" + encodeURIComponent(s.ext_source || "") +
+    "&ext_id=" + encodeURIComponent(s.ext_id || "") +
+    "&title=" + encodeURIComponent(s.title || "") +
+    "&artist=" + encodeURIComponent(s.artist || "") +
+    "&album=" + encodeURIComponent(s.album || "") +
+    "&cover=" + encodeURIComponent(s.cover || "") +
+    "&duration=" + (s.duration || 0) +
+    (prefer ? "&prefer=" + prefer + "&force=1" : "");
+
   api(qUrl).then(function(res) {
     if (res.error) {
       document.getElementById("pTitle").textContent = s.title + " (无可用源)";
       return;
     }
+    if (res.songId) s.id = res.songId;
     var playUrl = res.needProxy ? res.proxyUrl : res.url;
     audio.src = playUrl;
     audio.play().catch(function(){});
@@ -794,7 +1099,12 @@ function playIndex(idx, prefer) {
     document.getElementById("pCover").classList.add("spin");
   });
 
-  api("/api/song?id=" + s.id).then(function(d) {
+  var lrcUrl = "/api/song?id=" + (s.id || 0) +
+    "&ext_source=" + encodeURIComponent(s.ext_source || "") +
+    "&ext_id=" + encodeURIComponent(s.ext_id || "") +
+    "&title=" + encodeURIComponent(s.title || "") +
+    "&artist=" + encodeURIComponent(s.artist || "");
+  api(lrcUrl).then(function(d) {
     parseLrc((d.song && d.song.lyric_lrc) || "", (d.song && d.song.lyric_trans) || "");
   });
 }
@@ -873,6 +1183,7 @@ function openTimer() {
 }
 function fmt(s) { var m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ":" + (r < 10 ? "0" : "") + r; }
 function esc(s) { return String(s || "").replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+function escAttr(s) { return String(s || "").replace(/'/g, "\\\\'"); }
 
 goHome();
 </script>
