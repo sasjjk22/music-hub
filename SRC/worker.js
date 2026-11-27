@@ -5,7 +5,6 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const NE_HEADERS = { "User-Agent": UA, Referer: "https://music.163.com/", Cookie: "os=pc; appver=2.9.7" };
 
 const PRESET_ARTISTS = [
-  // 华语男
   { name: "周杰伦", cat: "华语男", tag: "华语流行" },
   { name: "陈奕迅", cat: "华语男", tag: "华语流行" },
   { name: "林俊杰", cat: "华语男", tag: "华语流行" },
@@ -22,7 +21,6 @@ const PRESET_ARTISTS = [
   { name: "汪苏泷", cat: "华语男", tag: "流行创作" },
   { name: "胡彦斌", cat: "华语男", tag: "全能唱作" },
   { name: "张敬轩", cat: "华语男", tag: "粤语流行" },
-  // 华语女
   { name: "邓紫棋", cat: "华语女", tag: "华语流行" },
   { name: "孙燕姿", cat: "华语女", tag: "华语天后" },
   { name: "梁静茹", cat: "华语女", tag: "情歌天后" },
@@ -36,7 +34,6 @@ const PRESET_ARTISTS = [
   { name: "徐佳莹", cat: "华语女", tag: "创作女声" },
   { name: "杨千嬅", cat: "华语女", tag: "粤语情歌" },
   { name: "容祖儿", cat: "华语女", tag: "港乐天后" },
-  // 经典怀旧
   { name: "张学友", cat: "经典怀旧", tag: "经典歌神" },
   { name: "王菲", cat: "经典怀旧", tag: "经典天后" },
   { name: "邓丽君", cat: "经典怀旧", tag: "时代金曲" },
@@ -52,7 +49,6 @@ const PRESET_ARTISTS = [
   { name: "周华健", cat: "经典怀旧", tag: "国民歌王" },
   { name: "任贤齐", cat: "经典怀旧", tag: "90年代" },
   { name: "张信哲", cat: "经典怀旧", tag: "情歌王子" },
-  // 乐队与民谣摇滚
   { name: "五月天", cat: "乐队组合", tag: "摇滚乐团" },
   { name: "告五人", cat: "乐队组合", tag: "独立乐团" },
   { name: "草东没有派对", cat: "乐队组合", tag: "独立摇滚" },
@@ -63,7 +59,6 @@ const PRESET_ARTISTS = [
   { name: "赵雷", cat: "乐队组合", tag: "城市民谣" },
   { name: "陈粒", cat: "乐队组合", tag: "独立民谣" },
   { name: "S.H.E", cat: "乐队组合", tag: "国民女团" },
-  // 日韩
   { name: "YOASOBI", cat: "日韩", tag: "日语流行" },
   { name: "米津玄师", cat: "日韩", tag: "日语创作" },
   { name: "久石让", cat: "日韩", tag: "电影配乐" },
@@ -72,14 +67,12 @@ const PRESET_ARTISTS = [
   { name: "藤井风", cat: "日韩", tag: "R&B流行" },
   { name: "IU", cat: "日韩", tag: "韩国女solo" },
   { name: "BLACKPINK", cat: "日韩", tag: "K-Pop" },
-  // ACG
   { name: "Aimer", cat: "ACG", tag: "动漫歌姬" },
   { name: "泽野弘之", cat: "ACG", tag: "燃系OST" },
   { name: "LiSA", cat: "ACG", tag: "动画主题曲" },
   { name: "塞壬唱片-MSR", cat: "ACG", tag: "明日方舟" },
   { name: "HOYO-MiX", cat: "ACG", tag: "米哈游原声" },
   { name: "Vanguard Sound", cat: "ACG", tag: "游戏电音" },
-  // 欧美
   { name: "Taylor Swift", cat: "欧美", tag: "欧美流行" },
   { name: "Coldplay", cat: "欧美", tag: "英伦摇滚" },
   { name: "Ed Sheeran", cat: "欧美", tag: "流行民谣" },
@@ -90,20 +83,23 @@ const PRESET_ARTISTS = [
   { name: "Bruno Mars", cat: "欧美", tag: "Funk流行" },
 ];
 
+const RADIO_STATIONS = [
+  { id: "personal", title: "私人漫游 FM", desc: "根据你的红心喜欢与歌单实时推荐相似歌曲", icon: "✨", grad: "linear-gradient(135deg,#0ea5e9,#6366f1)" },
+  { id: "quiet", title: "深夜安静 · 纯音乐", desc: "钢琴、轻音乐、助眠氛围声景，伴你安静入眠", icon: "🌙", grad: "linear-gradient(135deg,#1e293b,#475569)" },
+  { id: "lofi", title: "专注学习 · Lo-Fi", desc: "低保真节拍与轻爵士，看书、写代码最佳背景音", icon: "☕", grad: "linear-gradient(135deg,#0f766e,#10b981)" },
+  { id: "rain", title: "雨夜治愈 · 慢情歌", desc: "民谣与温柔叙事人声，适合一个人的傍晚", icon: "🌧️", grad: "linear-gradient(135deg,#4f46e5,#7c3aed)" },
+  { id: "classic", title: "时光随身听 · 怀旧", desc: "80/90年代华语与粤语时代金曲无限漫游", icon: "📻", grad: "linear-gradient(135deg,#b45309,#f59e0b)" },
+  { id: "cantonese", title: "港乐深夜档 · 粤语", desc: "陈奕迅、张学友、张国荣、Beyond 粤语经典", icon: "🌃", grad: "linear-gradient(135deg,#be185d,#f43f5e)" },
+  { id: "acg", title: "二次元 · 游戏原声", desc: "ACG 主题曲与塞壬唱片官方无损库随心听", icon: "🎧", grad: "linear-gradient(135deg,#2563eb,#06b6d4)" },
+  { id: "drive", title: "公路驾驶 · 燃曲电音", desc: "摇滚、节奏电音，提神醒脑不停歇", icon: "🚗", grad: "linear-gradient(135deg,#dc2626,#f97316)" },
+];
+
 const DEFAULT_JUNK_WORDS = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版"];
 const SHEET_TAGS = [
-  { id: "华语", title: "华语" },
-  { id: "流行", title: "流行" },
-  { id: "怀旧", title: "怀旧" },
-  { id: "粤语", title: "粤语" },
-  { id: "欧美", title: "欧美" },
-  { id: "日语", title: "日语" },
-  { id: "ACG", title: "ACG" },
-  { id: "民谣", title: "民谣" },
-  { id: "摇滚", title: "摇滚" },
-  { id: "说唱", title: "说唱" },
-  { id: "轻音乐", title: "轻音乐" },
-  { id: "影视原声", title: "影视原声" },
+  { id: "华语", title: "华语" }, { id: "流行", title: "流行" }, { id: "怀旧", title: "怀旧" },
+  { id: "粤语", title: "粤语" }, { id: "欧美", title: "欧美" }, { id: "日语", title: "日语" },
+  { id: "ACG", title: "ACG" }, { id: "民谣", title: "民谣" }, { id: "摇滚", title: "摇滚" },
+  { id: "说唱", title: "说唱" }, { id: "轻音乐", title: "轻音乐" }, { id: "影视原声", title: "影视原声" },
 ];
 
 let runtimeCfgCache = { ts: 0, junkWords: DEFAULT_JUNK_WORDS, sources: [] };
@@ -117,11 +113,7 @@ async function getRuntimeCfg(env) {
       env.DB.prepare("SELECT * FROM sources WHERE enabled=1 ORDER BY priority ASC").all(),
     ]);
     const jw = (junkRow?.value || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-    runtimeCfgCache = {
-      ts: now,
-      junkWords: jw.length ? jw : DEFAULT_JUNK_WORDS,
-      sources: srcRes.results || [],
-    };
+    runtimeCfgCache = { ts: now, junkWords: jw.length ? jw : DEFAULT_JUNK_WORDS, sources: srcRes.results || [] };
   } catch {
     runtimeCfgCache = { ts: now, junkWords: DEFAULT_JUNK_WORDS, sources: [] };
   }
@@ -134,6 +126,14 @@ function httpsCover(u) {
   if (!u || typeof u !== "string") return "";
   if (u.startsWith("http://") && u.includes("music.126.net")) return "https://" + u.slice(7);
   return u;
+}
+function shuffleArr(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
@@ -151,7 +151,7 @@ function html(body, status = 200, extraHeaders = {}) {
 }
 async function withEdgeCache(ctx, keyPath, ttlSec, fn) {
   const cache = caches.default;
-  const cacheKey = new Request("https://cache.internal/v4" + keyPath);
+  const cacheKey = new Request("https://cache.internal/v5" + keyPath);
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
   const resp = await fn(ttlSec);
@@ -159,8 +159,7 @@ async function withEdgeCache(ctx, keyPath, ttlSec, fn) {
   return resp;
 }
 async function purgeHomeCache(ctx) {
-  const cache = caches.default;
-  ctx.waitUntil(cache.delete(new Request("https://cache.internal/v4/home")));
+  ctx.waitUntil(caches.default.delete(new Request("https://cache.internal/v5/home")));
 }
 
 function getTokenFromReq(request) {
@@ -192,7 +191,6 @@ function isBasicAudioUrl(u) {
   return Boolean(u && typeof u === "string" && u.startsWith("http") && !u.includes("panspace.kuwo.cn") && !u.includes("/404"));
 }
 
-// 改用 Range: bytes=0-0 校验，兼容不支持 HEAD 的 CDN，同时防止 30 秒试听截断
 async function verifyNot30sTrial(url, durationSec, extraHdrs = {}) {
   if (!isBasicAudioUrl(url)) return null;
   try {
@@ -264,11 +262,8 @@ async function liveSearchArtists(query, limit = 20, page = 1) {
     );
     const list = (await r.json())?.result?.artists || [];
     return list.map((a) => ({
-      id: String(a.id),
-      name: a.name,
-      avatar: httpsCover(a.picUrl || a.img1v1Url || ""),
-      worksNum: a.musicSize || 0,
-      albumNum: a.albumSize || 0,
+      id: String(a.id), name: a.name, avatar: httpsCover(a.picUrl || a.img1v1Url || ""),
+      worksNum: a.musicSize || 0, albumNum: a.albumSize || 0,
     }));
   } catch { return []; }
 }
@@ -282,13 +277,8 @@ async function liveSearchSheets(query, limit = 24, page = 1) {
     );
     const list = (await r.json())?.result?.playlists || [];
     return list.map((p) => ({
-      id: `ne_${p.id}`,
-      rawId: String(p.id),
-      title: p.name,
-      artist: p.creator?.nickname || "网易云歌单",
-      cover: httpsCover(p.coverImgUrl || ""),
-      playCount: p.playCount || 0,
-      worksNum: p.trackCount || 0,
+      id: `ne_${p.id}`, rawId: String(p.id), title: p.name, artist: p.creator?.nickname || "网易云歌单",
+      cover: httpsCover(p.coverImgUrl || ""), playCount: p.playCount || 0, worksNum: p.trackCount || 0,
       description: (p.description || "").slice(0, 120),
     }));
   } catch { return []; }
@@ -304,13 +294,8 @@ async function fetchRecommendSheets(cat = "全部", limit = 24, page = 1) {
     const list = (await r.json())?.playlists || [];
     if (list.length) {
       return list.map((p) => ({
-        id: `ne_${p.id}`,
-        rawId: String(p.id),
-        title: p.name,
-        artist: p.creator?.nickname || "精选歌单",
-        cover: httpsCover(p.coverImgUrl || ""),
-        playCount: p.playCount || 0,
-        worksNum: p.trackCount || 0,
+        id: `ne_${p.id}`, rawId: String(p.id), title: p.name, artist: p.creator?.nickname || "精选歌单",
+        cover: httpsCover(p.coverImgUrl || ""), playCount: p.playCount || 0, worksNum: p.trackCount || 0,
         description: (p.description || "").slice(0, 120),
       }));
     }
@@ -328,11 +313,8 @@ async function fetchNeteasePlaylistDetail(pid, limit = 150) {
       const pl = d?.playlist || d?.result;
       if (pl?.tracks?.length) {
         return {
-          id: `ne_${pid}`,
-          title: pl.name || "网易云歌单",
-          artist: pl.creator?.nickname || "网易云音乐",
-          cover: httpsCover(pl.coverImgUrl || ""),
-          description: (pl.description || "").slice(0, 160),
+          id: `ne_${pid}`, title: pl.name || "网易云歌单", artist: pl.creator?.nickname || "网易云音乐",
+          cover: httpsCover(pl.coverImgUrl || ""), description: (pl.description || "").slice(0, 160),
           songs: pl.tracks.slice(0, limit).map(mapNeteaseSong),
         };
       }
@@ -351,25 +333,16 @@ async function fetchQQPlaylistDetail(tid) {
     const cd = data?.cdlist?.[0];
     if (!cd?.songlist?.length) return null;
     return {
-      id: `qq_${tid}`,
-      title: cd.dissname || "QQ音乐歌单",
-      artist: cd.nickname || "QQ音乐",
-      cover: cd.logo || "",
-      description: (cd.desc || "").replace(/<[^>]+>/g, "").slice(0, 160),
+      id: `qq_${tid}`, title: cd.dissname || "QQ音乐歌单", artist: cd.nickname || "QQ音乐",
+      cover: cd.logo || "", description: (cd.desc || "").replace(/<[^>]+>/g, "").slice(0, 160),
       songs: cd.songlist.slice(0, 150).map((s) => {
         const artists = (s.singer || []).map((a) => a.name).filter(Boolean).join(" / ") || "未知歌手";
         const albumMid = s.album?.mid || "";
         return {
-          id: 0,
-          norm_key: makeNormKey(s.title || s.name, artists),
-          title: s.title || s.name || "",
-          artist: artists,
-          album: s.album?.name || "",
+          id: 0, norm_key: makeNormKey(s.title || s.name, artists), title: s.title || s.name || "",
+          artist: artists, album: s.album?.name || "",
           cover: albumMid ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg` : "",
-          duration: Number(s.interval || 0),
-          category: "导入歌单",
-          ext_source: "qq",
-          ext_id: String(s.mid || s.id || ""),
+          duration: Number(s.interval || 0), category: "导入歌单", ext_source: "qq", ext_id: String(s.mid || s.id || ""),
         };
       }),
     };
@@ -380,21 +353,12 @@ async function importExternalPlaylist(urlLike, env) {
   let raw = String(urlLike || "").trim();
   if (!raw) return null;
 
-  // 1. 识别 Music Hub 分享链接或分享码 (?share=xxx 或 /share/xxx)
   const mhMatch = raw.match(/(?:share=|\/share\/)([a-zA-Z0-9_-]{4,24})/);
   if (mhMatch) {
     const row = await env.DB.prepare("SELECT * FROM shares WHERE id = ?").bind(mhMatch[1]).first();
-    if (row) {
-      return {
-        title: row.title,
-        description: row.description || "Music Hub 分享歌单",
-        cover: "",
-        songs: JSON.parse(row.songs_json || "[]"),
-      };
-    }
+    if (row) return { title: row.title, description: row.description || "Music Hub 分享歌单", cover: "", songs: JSON.parse(row.songs_json || "[]") };
   }
 
-  // 处理短链跳转（如 163cn.tv / c6.y.qq.com）
   if (/^https?:\/\/(163cn\.tv|c6\.y\.qq\.com|t\.cn)/i.test(raw)) {
     try {
       const rr = await fetchTimeout(raw, { method: "GET", headers: { "User-Agent": UA }, redirect: "follow" }, 4500);
@@ -403,17 +367,165 @@ async function importExternalPlaylist(urlLike, env) {
     } catch {}
   }
 
-  // 2. QQ音乐歌单链接
   if (raw.includes("y.qq.com") || raw.includes("qq.com")) {
     const qm = raw.match(/playlist\/(\d+)/) || raw.match(/[?&]id=(\d+)/) || raw.match(/disstid=(\d+)/);
     if (qm) return await fetchQQPlaylistDetail(qm[1]);
   }
 
-  // 3. 网易云音乐歌单链接或纯数字 ID
   const nm = raw.match(/(?:playlist\/|[?&]id=)(\d{5,15})/) || raw.match(/^(\d{5,15})$/);
   if (nm) return await fetchNeteasePlaylistDetail(nm[1]);
-
   return null;
+}
+
+// ---------- 电台与相似推荐引擎 ----------
+async function fetchNeteaseSimiSongs(songId) {
+  if (!songId || !/^\d+$/.test(String(songId))) return [];
+  try {
+    const r = await fetchTimeout(
+      `https://music.163.com/api/v1/discovery/simiSong?songid=${songId}&limit=16`,
+      { headers: NE_HEADERS }, 3500
+    );
+    const data = await r.json();
+    return (data?.songs || []).filter((s) => s?.name).map(mapNeteaseSong);
+  } catch { return []; }
+}
+
+async function fetchNeteaseSimiSheets(songId) {
+  if (!songId || !/^\d+$/.test(String(songId))) return [];
+  try {
+    const r = await fetchTimeout(
+      `https://music.163.com/api/discovery/simiPlaylist?songid=${songId}&limit=8`,
+      { headers: NE_HEADERS }, 3500
+    );
+    const data = await r.json();
+    return (data?.playlists || []).map((p) => ({
+      id: `ne_${p.id}`, rawId: String(p.id), title: p.name, artist: p.creator?.nickname || "相似推荐歌单",
+      cover: httpsCover(p.coverImgUrl || ""), playCount: p.playCount || 0, worksNum: p.trackCount || 0,
+      description: (p.description || "").slice(0, 120),
+    }));
+  } catch { return []; }
+}
+
+async function getSceneRadioPool(mode, env, ctx, junkList) {
+  const cache = caches.default;
+  const cacheKey = new Request(`https://cache.internal/v5/radio_pool/${mode}`);
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    const data = await hit.json().catch(() => null);
+    if (data && data.length) return data;
+  }
+
+  let pool = [];
+  const seen = new Set();
+  const pushItem = (s) => {
+    if (!s || !s.title || isJunkTitle(s.title, "", junkList)) return;
+    if (s.duration && s.duration > 720) return; // 过滤超过12分钟的长播客/电台串烧
+    const nk = s.norm_key || makeNormKey(s.title, s.artist);
+    if (!nk || seen.has(nk)) return;
+    seen.add(nk);
+    pool.push({ ...s, norm_key: nk, cover: httpsCover(s.cover || "") });
+  };
+
+  if (mode === "classic" || mode === "acg") {
+    const catSql = mode === "classic" ? "('经典','华语')" : "('ACG')";
+    const { results } = await env.DB.prepare(
+      `SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked=0 AND category IN ${catSql} ORDER BY score DESC LIMIT 100`
+    ).all();
+    (results || []).forEach(pushItem);
+  }
+
+  const sceneCfg = {
+    quiet: { sheetKw: "深夜 安静 纯音乐 钢琴 助眠", songKw: "久石让 坂本龙一 钢琴 纯音乐 轻音乐" },
+    lofi: { sheetKw: "Lo-Fi 学习 专注 纯音乐 轻爵士", songKw: "Lo-Fi Chill Beats 轻音乐 爵士" },
+    rain: { sheetKw: "雨夜 民谣 慢情歌 治愈", songKw: "赵雷 陈粒 毛不易 民谣 慢情歌" },
+    classic: { sheetKw: "90年代 怀旧 金曲 老歌", songKw: "张学友 王菲 周杰伦 Beyond 经典" },
+    cantonese: { sheetKw: "粤语 经典 港乐 深夜", songKw: "粤语 陈奕迅 张国荣 张学友 Beyond" },
+    acg: { sheetKw: "ACG 动漫 游戏 原声", songKw: "Aimer 泽野弘之 YOASOBI 塞壬唱片" },
+    drive: { sheetKw: "车载 电音 摇滚 燃曲", songKw: "Alan Walker Linkin Park Coldplay 电音" },
+  }[mode] || { sheetKw: "华语 精选", songKw: "华语 流行" };
+
+  const [sheets, live] = await Promise.all([
+    liveSearchSheets(sceneCfg.sheetKw, 4, 1),
+    liveSearchSongs(sceneCfg.songKw, 35, 1, junkList),
+  ]);
+  if (sheets.length) {
+    const pickedSheets = shuffleArr(sheets).slice(0, 2);
+    const details = await Promise.all(pickedSheets.map((sh) => fetchNeteasePlaylistDetail(sh.rawId, 45)));
+    details.forEach((d) => { if (d?.songs) d.songs.forEach(pushItem); });
+  }
+  live.forEach(pushItem);
+
+  if (pool.length) {
+    ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(pool), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=900" } })));
+  }
+  return pool;
+}
+
+async function handleRadioRequest(payload, env, ctx) {
+  const cfg = await getRuntimeCfg(env);
+  const mode = String(payload.mode || "personal").trim();
+  const exclude = new Set(Array.isArray(payload.exclude) ? payload.exclude : []);
+  const needSheets = Boolean(payload.needSheets);
+
+  if (mode !== "personal") {
+    const pool = await getSceneRadioPool(mode, env, ctx, cfg.junkWords);
+    const filtered = shuffleArr(pool.filter((s) => !exclude.has(s.norm_key))).slice(0, 20);
+    return { mode, station: RADIO_STATIONS.find((x) => x.id === mode) || RADIO_STATIONS[1], songs: filtered, sheets: [] };
+  }
+
+  const seedArtists = shuffleArr(Array.isArray(payload.artists) ? payload.artists.slice(0, 10) : []).slice(0, 2);
+  const seedIds = shuffleArr(Array.isArray(payload.ids) ? payload.ids.slice(0, 12) : []).slice(0, 2);
+  const seedCats = Array.isArray(payload.cats) && payload.cats.length ? payload.cats.slice(0, 3) : ["华语", "经典"];
+
+  const tasks = [];
+  for (const sid of seedIds) tasks.push(fetchNeteaseSimiSongs(sid));
+  for (const ar of seedArtists) tasks.push(liveSearchSongs(ar, 18, 1, cfg.junkWords));
+
+  const ph = seedCats.map(() => "?").join(",");
+  tasks.push(
+    env.DB.prepare(
+      `SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked=0 AND category IN (${ph}) ORDER BY score DESC LIMIT 70`
+    ).bind(...seedCats).all().then((r) => r.results || []).catch(() => [])
+  );
+
+  let sheetPromise = Promise.resolve([]);
+  if (needSheets) {
+    sheetPromise = (async () => {
+      const shTasks = [];
+      if (seedIds[0]) shTasks.push(fetchNeteaseSimiSheets(seedIds[0]));
+      if (seedArtists[0]) shTasks.push(liveSearchSheets(seedArtists[0] + " 精选", 8, 1));
+      else shTasks.push(fetchRecommendSheets(seedCats[0] || "华语", 8, 1));
+      const res = await Promise.all(shTasks);
+      const out = [], seenSh = new Set();
+      for (const list of res) {
+        for (const item of list || []) {
+          if (seenSh.has(item.id)) continue;
+          seenSh.add(item.id);
+          out.push(item);
+        }
+      }
+      return out.slice(0, 10);
+    })();
+  }
+
+  const [songLists, sheets] = await Promise.all([Promise.all(tasks), sheetPromise]);
+  const pool = [], seen = new Set();
+  for (const list of songLists) {
+    for (const s of list || []) {
+      if (!s || !s.title || isJunkTitle(s.title, "", cfg.junkWords)) continue;
+      const nk = s.norm_key || makeNormKey(s.title, s.artist);
+      if (!nk || seen.has(nk) || exclude.has(nk)) continue;
+      seen.add(nk);
+      pool.push({ ...s, norm_key: nk, cover: httpsCover(s.cover || "") });
+    }
+  }
+
+  return {
+    mode: "personal",
+    station: RADIO_STATIONS[0],
+    songs: shuffleArr(pool).slice(0, 20),
+    sheets,
+  };
 }
 
 async function fetchOfficialArtistData(name, artistId = "", junkList = DEFAULT_JUNK_WORDS) {
@@ -428,8 +540,7 @@ async function fetchOfficialArtistData(name, artistId = "", junkList = DEFAULT_J
       if (!list.length) return { songs: [], albums: [] };
       const nl = name.toLowerCase();
       const target = list.find((a) => (a.name || "").toLowerCase() === nl) || list[0];
-      aid = target.id;
-      artistName = target.name || name;
+      aid = target.id; artistName = target.name || name;
     }
 
     const [hotR, albR] = await Promise.all([
@@ -557,8 +668,7 @@ async function raceVKeys(song, ids, trace, endpoint = "https://api.vkeys.cn/v2/m
   const tasks = [3, 2].map(async (q) => {
     const r = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}&n=1&quality=${q}`, { headers: { "User-Agent": UA } }, 2800);
     const d = await r.json();
-    const u = d?.data?.url;
-    const real = await verifyNot30sTrial(u, song.duration);
+    const real = await verifyNot30sTrial(d?.data?.url, song.duration);
     if (!real) throw new Error("vk_qq_empty");
     return { url: real, source: "vkeys:qq" };
   });
@@ -658,6 +768,15 @@ function isSafeExternalUrl(raw) {
     ) return false;
     return true;
   } catch { return false; }
+}
+
+function extFromContentType(ct) {
+  const c = String(ct || "").toLowerCase();
+  if (c.includes("flac")) return ".flac";
+  if (c.includes("mp4") || c.includes("aac") || c.includes("m4a")) return ".m4a";
+  if (c.includes("wav")) return ".wav";
+  if (c.includes("ogg") || c.includes("opus")) return ".ogg";
+  return ".mp3";
 }
 
 export default {
@@ -775,7 +894,7 @@ export default {
           const chartTitle = String(body.chartTitle || pl.name || "导入歌单").trim();
           await env.DB.prepare(`INSERT INTO charts (id,title,category,cover,description,song_ids_json,sort_order,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,category=excluded.category,cover=excluded.cover,song_ids_json=excluded.song_ids_json,updated_at=excluded.updated_at`).bind(`ne_${pid}`, chartTitle, chartCat, httpsCover(pl.coverImgUrl || ""), (pl.description || "").slice(0, 120), JSON.stringify(songIds), 45, now).run();
           await purgeHomeCache(ctx);
-          ctx.waitUntil(caches.default.delete(new Request(`https://cache.internal/v4/chart/${encodeURIComponent(`ne_${pid}`)}`)));
+          ctx.waitUntil(caches.default.delete(new Request(`https://cache.internal/v5/chart/${encodeURIComponent(`ne_${pid}`)}`)));
           return json({ ok: true, title: chartTitle, importedCount: songIds.length });
         }
         if (path === "/api/admin/chart/update" && request.method === "POST") {
@@ -821,12 +940,13 @@ export default {
       if (path === "/api/stream") {
         if (!(checkToken(request, env) || (await checkAdmin(request, env)))) return json({ error: "Unauthorized" }, 401);
         let target = url.searchParams.get("u") || "", src = url.searchParams.get("src") || "";
+        const isDl = url.searchParams.get("dl") === "1";
+        let fn = (url.searchParams.get("fn") || "music").replace(/[/\\?%*:|"<>]/g, "_").slice(0, 120);
         if (!isSafeExternalUrl(target)) return json({ error: "invalid stream url" }, 400);
         const fwdHeaders = new Headers({ "User-Agent": UA });
         if (src.includes("kuwo") || target.includes("kuwo")) fwdHeaders.set("Referer", "https://www.kuwo.cn/");
-        const range = request.headers.get("Range"); if (range) fwdHeaders.set("Range", range);
+        const range = request.headers.get("Range"); if (range && !isDl) fwdHeaders.set("Range", range);
 
-        // 手动跟随最多 3 次跳转，校验每一次跳转地址防止 SSRF
         let upstream = await fetch(target, { headers: fwdHeaders, redirect: "manual" });
         for (let hop = 0; hop < 3 && upstream.status >= 300 && upstream.status < 400; hop++) {
           const loc = upstream.headers.get("Location");
@@ -844,8 +964,13 @@ export default {
         const outHeaders = new Headers();
         for (const h of ["content-type", "content-length", "content-range", "accept-ranges"]) { const v = upstream.headers.get(h); if (v) outHeaders.set(h, v); }
         outHeaders.set("Access-Control-Allow-Origin", "*");
+        outHeaders.set("Access-Control-Expose-Headers", "Content-Type, Content-Length, Content-Disposition");
         outHeaders.set("X-Content-Type-Options", "nosniff");
         if (!outHeaders.has("accept-ranges")) outHeaders.set("Accept-Ranges", "bytes");
+        if (isDl) {
+          if (!/\.(mp3|flac|m4a|wav|ogg|aac)$/i.test(fn)) fn += extFromContentType(ct);
+          outHeaders.set("Content-Disposition", "attachment; filename*=UTF-8''" + encodeURIComponent(fn));
+        }
         return new Response(upstream.body, { status: upstream.status, headers: outHeaders });
       }
 
@@ -871,8 +996,21 @@ export default {
         return withEdgeCache(ctx, "/home", 600, async (ttl) => {
           const { results } = await env.DB.prepare("SELECT id, title, category, cover, description FROM charts ORDER BY sort_order ASC").all();
           const charts = (results || []).map((c) => ({ ...c, cover: httpsCover(c.cover) }));
-          return json({ charts, artists: PRESET_ARTISTS, sheetTags: SHEET_TAGS }, 200, { "Cache-Control": `public, max-age=${ttl}` });
+          return json({ charts, artists: PRESET_ARTISTS, sheetTags: SHEET_TAGS, radioStations: RADIO_STATIONS }, 200, { "Cache-Control": `public, max-age=${ttl}` });
         });
+      }
+      if (path === "/api/radio") {
+        const payload = request.method === "POST"
+          ? await request.json().catch(() => ({}))
+          : {
+              mode: url.searchParams.get("mode") || "quiet",
+              artists: (url.searchParams.get("artists") || "").split(",").filter(Boolean),
+              ids: (url.searchParams.get("ids") || "").split(",").filter(Boolean),
+              cats: (url.searchParams.get("cats") || "").split(",").filter(Boolean),
+              exclude: (url.searchParams.get("exclude") || "").split(",").filter(Boolean),
+              needSheets: url.searchParams.get("needSheets") === "1",
+            };
+        return json(await handleRadioRequest(payload, env, ctx));
       }
       if (path === "/api/chart") {
         const id = url.searchParams.get("id"); if (!id) return json({ error: "missing id" }, 400);
@@ -959,15 +1097,10 @@ export default {
         const songs = Array.isArray(body.songs) ? body.songs.slice(0, 300) : [];
         if (!songs.length) return json({ error: "空歌单无法分享" }, 400);
         const slim = songs.map((s) => ({
-          id: Number(s.id || 0),
-          norm_key: s.norm_key || makeNormKey(s.title, s.artist),
-          title: String(s.title || ""),
-          artist: String(s.artist || ""),
-          album: String(s.album || ""),
-          cover: httpsCover(s.cover || ""),
-          duration: Number(s.duration || 0),
-          ext_source: s.ext_source || "",
-          ext_id: s.ext_id || "",
+          id: Number(s.id || 0), norm_key: s.norm_key || makeNormKey(s.title, s.artist),
+          title: String(s.title || ""), artist: String(s.artist || ""), album: String(s.album || ""),
+          cover: httpsCover(s.cover || ""), duration: Number(s.duration || 0),
+          ext_source: s.ext_source || "", ext_id: s.ext_id || "",
         }));
         const sid = (await digestHex("SHA-256", title + ":" + JSON.stringify(slim) + ":" + Date.now())).slice(0, 10);
         await env.DB.prepare("INSERT INTO shares (id, title, description, songs_json, created_at) VALUES (?, ?, ?, ?, ?)")
@@ -1068,7 +1201,7 @@ export default {
         }
         if (!song) return json({ error: "not found" }, 404);
 
-        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v4/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
+        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v5/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
         let resolved = null;
         if (!force) {
           const cached = await cache.match(cacheKey);
@@ -1110,25 +1243,15 @@ function isJunk(name, origTitle) {
 }
 function mapSong(s) {
   return {
-    id: String(s.id || 0),
-    title: s.title,
-    artist: s.artist,
-    album: s.album,
-    artwork: s.cover,
-    duration: s.duration,
-    category: s.category || "",
-    ext_source: s.ext_source || "",
-    ext_id: s.ext_id || ""
+    id: String(s.id || 0), title: s.title, artist: s.artist, album: s.album,
+    artwork: s.cover, duration: s.duration, category: s.category || "",
+    ext_source: s.ext_source || "", ext_id: s.ext_id || ""
   };
 }
 function mapSheet(p) {
   return {
-    id: String(p.id),
-    title: p.title,
-    artist: p.artist || "MusicHub",
-    artwork: p.cover,
-    playCount: p.playCount || 0,
-    worksNum: p.worksNum || 0,
+    id: String(p.id), title: p.title, artist: p.artist || "MusicHub",
+    artwork: p.cover, playCount: p.playCount || 0, worksNum: p.worksNum || 0,
     description: p.description || ""
   };
 }
@@ -1162,21 +1285,11 @@ module.exports = {
   async search(query, page, type) {
     if (type === "album") {
       const { data } = await axios.get(BASE + "/api/albums", { params: { q: query, page: page }, headers: H, timeout: 10000 });
-      return {
-        isEnd: !data.hasMore,
-        data: (data.albums || []).map(function(a) {
-          return { id: String(a.id), title: a.title, artist: a.artist, artwork: a.cover, date: a.publishTime };
-        })
-      };
+      return { isEnd: !data.hasMore, data: (data.albums || []).map(function(a) { return { id: String(a.id), title: a.title, artist: a.artist, artwork: a.cover, date: a.publishTime }; }) };
     }
     if (type === "artist") {
       const { data } = await axios.get(BASE + "/api/artists", { params: { q: query, page: page }, headers: H, timeout: 10000 });
-      return {
-        isEnd: !data.hasMore,
-        data: (data.artists || []).map(function(a) {
-          return { id: String(a.id), name: a.name, avatar: a.avatar, worksNum: a.worksNum || 0, description: a.tag || "" };
-        })
-      };
+      return { isEnd: !data.hasMore, data: (data.artists || []).map(function(a) { return { id: String(a.id), name: a.name, avatar: a.avatar, worksNum: a.worksNum || 0, description: a.tag || "" }; }) };
     }
     if (type === "sheet") {
       const { data } = await axios.get(BASE + "/api/sheets", { params: { q: query, page: page }, headers: H, timeout: 10000 });
@@ -1188,17 +1301,9 @@ module.exports = {
   },
 
   async getArtistWorks(artistItem, page, type) {
-    const { data } = await axios.get(BASE + "/api/artist", {
-      params: { name: artistItem.name, id: artistItem.id || "", page: page },
-      headers: H, timeout: 10000
-    });
+    const { data } = await axios.get(BASE + "/api/artist", { params: { name: artistItem.name, id: artistItem.id || "", page: page }, headers: H, timeout: 10000 });
     if (type === "album") {
-      return {
-        isEnd: true,
-        data: (data.albums || []).map(function(a) {
-          return { id: String(a.id), title: a.title, artist: a.artist || artistItem.name, artwork: a.cover, date: a.publishTime };
-        })
-      };
+      return { isEnd: true, data: (data.albums || []).map(function(a) { return { id: String(a.id), title: a.title, artist: a.artist || artistItem.name, artwork: a.cover, date: a.publishTime }; }) };
     }
     return { isEnd: !data.hasMore, data: (data.songs || []).map(mapSong) };
   },
@@ -1212,10 +1317,7 @@ module.exports = {
   async getRecommendSheetTags() {
     const { data } = await axios.get(BASE + "/api/home", { headers: H, timeout: 8000 });
     var tags = data.sheetTags || [{ id: "华语", title: "华语" }, { id: "怀旧", title: "怀旧" }, { id: "流行", title: "流行" }, { id: "ACG", title: "ACG" }];
-    return {
-      pinned: tags.slice(0, 6),
-      data: [{ title: "全网精选歌单", data: tags }]
-    };
+    return { pinned: tags.slice(0, 6), data: [{ title: "全网精选歌单", data: tags }] };
   },
 
   async getRecommendSheetsByTag(tag, page) {
@@ -1228,14 +1330,12 @@ module.exports = {
     var sid = String(sheetItem.id || "");
     if (sid.indexOf("ne_") === 0 || new RegExp("^\\\\d+$").test(sid)) {
       const { data } = await axios.get(BASE + "/api/sheet", { params: { id: sid }, headers: H, timeout: 10000 });
-      var list = (data.songs || []).map(mapSong);
-      var p = page || 1, ps = 50, slice = list.slice((p - 1) * ps, p * ps);
-      return { isEnd: p * ps >= list.length, sheetItem: sheetItem, musicList: slice };
+      var list = (data.songs || []).map(mapSong), p = page || 1, ps = 50;
+      return { isEnd: p * ps >= list.length, sheetItem: sheetItem, musicList: list.slice((p - 1) * ps, p * ps) };
     }
     const { data } = await axios.get(BASE + "/api/chart", { params: { id: sid }, headers: H, timeout: 10000 });
-    var clist = (data.songs || []).map(mapSong);
-    var cp = page || 1, cps = 50, cslice = clist.slice((cp - 1) * cps, cp * cps);
-    return { isEnd: cp * cps >= clist.length, sheetItem: sheetItem, musicList: cslice };
+    var clist = (data.songs || []).map(mapSong), cp = page || 1, cps = 50;
+    return { isEnd: cp * cps >= clist.length, sheetItem: sheetItem, musicList: clist.slice((cp - 1) * cps, cp * cps) };
   },
 
   async importMusicSheet(urlLike) {
