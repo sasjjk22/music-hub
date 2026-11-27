@@ -201,7 +201,8 @@ def crawl_netease_charts(songs_map, charts_list):
             else:
                 songs_map[nk]["source_ids"]["netease"] = nid
                 songs_map[nk]["score"] = max(songs_map[nk]["score"], score)
-            keys.append(nk)
+            if nk not in keys:
+                keys.append(nk)
 
         charts_list.append(
             {
@@ -399,8 +400,11 @@ def main():
                 [u["source_ids_json"], u["score"], now, u["id"]],
             )
 
-    id_rows = d1_query("SELECT id, norm_key FROM songs")
-    nk_to_id = {r["norm_key"]: r["id"] for r in id_rows}
+    if to_insert:
+        id_rows = d1_query("SELECT id, norm_key FROM songs")
+        nk_to_id = {r["norm_key"]: r["id"] for r in id_rows}
+    else:
+        nk_to_id = {nk: info["id"] for nk, info in existing.items()}
 
     for ch in charts_list:
         song_ids = [nk_to_id[nk] for nk in ch["norm_keys"] if nk in nk_to_id]
