@@ -325,6 +325,7 @@ var viewSongs = [], playQueue = [], curIdx = -1, curSong = null, lrcRows = [], t
 var playMode = localStorage.getItem("mh_mode") || "loop";
 var candidates = [], curCandIdx = -1, playSeq = 0, autoWaitMeta = false, cloudDone = false;
 var curTabName = "discover", backTarget = "discover", lastSharedData = null;
+var cloudSkips = [], cloudRetries = 0;
 var userLrcScrollUntil = 0, toastTimer = null, radioMode = "", radioFetching = false, recLoading = false;
 var pageState = { type: "", query: "", page: 1, hasMore: false, artistAlbums: [], artistSongs: [], artistTab: "songs", artistName: "", artistTag: "" };
 
@@ -1059,6 +1060,24 @@ function recordHistory(s) {
   localStorage.setItem("mh_history_v1", JSON.stringify(playHistory));
 }
 
+function fetchCloudPlay(s, seq) {
+  var qUrl = "/api/play?id=" + (s.id || 0) + "&q=high&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "") + "&album=" + encodeURIComponent(s.album || "") + "&cover=" + encodeURIComponent(s.cover || "") + "&duration=" + (s.duration || 0);
+  if (cloudSkips.length) qUrl += "&skip=" + encodeURIComponent(cloudSkips.join(",")) + "&force=1";
+  api(qUrl).then(function(res) {
+    if (seq !== playSeq) return;
+    cloudDone = true;
+    if (res.songId) s.id = res.songId;
+    if (!res.error && res.url) {
+      addCandidate(seq, { label: "云端(" + (res.source || "ok") + ")", url: res.needProxy ? res.proxyUrl : res.url, isTrial: false, cloudSource: res.source || "" });
+    } else if (!candidates.length) {
+      document.getElementById("srcBar").innerHTML = '<span style="font-size:11px;color:var(--warn);">暂未匹配到完整源 (' + esc((res.trace || []).join(" | ")) + ')</span>';
+      document.getElementById("dArtist").textContent = s.artist + " · 暂无可用完整源";
+    } else if (candidates.every(function(x) { return x.isTrial; }) && candidates[0]) {
+      pickCandidate(0, true);
+      toast("该曲暂无完整版，已播放可用短版/试听");
+    }
+  }).catch(function() { cloudDone = true; });
+}
 function playQueueIdx(idx) {
   if (idx < 0 || idx >= playQueue.length) return;
   curIdx = idx; var s = playQueue[idx]; curSong = s;
@@ -1083,21 +1102,8 @@ function playQueueIdx(idx) {
   fetchDirectGD(s, "joox", "JOOX(直连)", seq);
   fetchDirectGD(s, "netease", "网易(直连)", seq);
 
-  var qUrl = "/api/play?id=" + (s.id || 0) + "&q=high&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "") + "&album=" + encodeURIComponent(s.album || "") + "&cover=" + encodeURIComponent(s.cover || "") + "&duration=" + (s.duration || 0);
-  api(qUrl).then(function(res) {
-    if (seq !== playSeq) return;
-    cloudDone = true;
-    if (res.songId) s.id = res.songId;
-    if (!res.error && res.url) {
-      addCandidate(seq, { label: "云端(" + (res.source || "ok") + ")", url: res.needProxy ? res.proxyUrl : res.url, isTrial: false });
-    } else if (!candidates.length) {
-      document.getElementById("srcBar").innerHTML = '<span style="font-size:11px;color:var(--warn);">暂未匹配到完整源 (' + esc((res.trace || []).join(" | ")) + ')</span>';
-      document.getElementById("dArtist").textContent = s.artist + " · 暂无可用完整源";
-    } else if (candidates.every(function(x) { return x.isTrial; }) && candidates[0]) {
-      pickCandidate(0, true);
-      toast("该曲暂无完整版，已播放可用短版/试听");
-    }
-  }).catch(function() { cloudDone = true; });
+  cloudSkips = []; cloudRetries = 0;
+  fetchCloudPlay(s, seq);
 
   api("/api/song?id=" + (s.id || 0) + "&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "")).then(function(d) {
     if (seq === playSeq) parseLrc((d.song && d.song.lyric_lrc) || "", (d.song && d.song.lyric_trans) || "");
@@ -1114,6 +1120,14 @@ audio.addEventListener("loadedmetadata", function() {
     if (c.label.indexOf("[试听]") < 0 && c.label.indexOf("[短版]") < 0) c.label += tag;
     renderSrcBar();
     for (var i = 0; i < candidates.length; i++) { if (!candidates[i].isTrial) { pickCandidate(i, false); return; } }
+    if (c.cloudSource && cloudRetries < 2) {
+      var srcTag = c.cloudSource.split(":")[0].replace("meting_injahow", "meting");
+      if (cloudSkips.indexOf(srcTag) < 0) cloudSkips.push(srcTag);
+      cloudRetries++; cloudDone = false;
+      document.getElementById("dArtist").textContent = curSong.artist + " · 跳过短版，自动匹配完整源...";
+      fetchCloudPlay(curSong, playSeq);
+      return;
+    }
     if (cloudDone) {
       autoWaitMeta = false; audio.play().catch(function(){}); setPlayIcon(true);
       toast("全网仅匹配到短版/试听片段");
