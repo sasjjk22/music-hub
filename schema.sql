@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS sources (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  type TEXT NOT NULL,          -- 'agg' | 'native' | 'bili'
+  type TEXT NOT NULL,          -- 'agg' | 'vkeys' | 'native' | 'bili'
   endpoint TEXT DEFAULT '',
   priority INTEGER DEFAULT 10,
   enabled INTEGER DEFAULT 1,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS songs (
   score INTEGER DEFAULT 0,
   lyric_lrc TEXT DEFAULT '',
   lyric_trans TEXT DEFAULT '',
-  source_ids_json TEXT DEFAULT '{}', -- {"netease":"123","msr":"456","bili":"BV1xx","r2":"a.flac"}
+  source_ids_json TEXT DEFAULT '{}',
   updated_at INTEGER DEFAULT 0,
   is_blocked INTEGER DEFAULT 0
 );
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS songs (
 CREATE INDEX IF NOT EXISTS idx_songs_cat_score ON songs(category, score DESC);
 CREATE INDEX IF NOT EXISTS idx_songs_score ON songs(score DESC);
 
--- 3. FTS5 全文索引（trigram 支持中文 3 字以上高效检索，免全表扫描）
+-- 3. FTS5 全文索引
 CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
   title,
   artist,
@@ -59,7 +59,7 @@ CREATE TRIGGER IF NOT EXISTS songs_au AFTER UPDATE OF title, artist, album ON so
   VALUES (new.id, new.title, new.artist, new.album);
 END;
 
--- 4. 榜单与精选歌单表（存 ID 数组，点击榜单只读 1 行 + 主键 IN 查询）
+-- 4. 榜单与精选歌单表
 CREATE TABLE IF NOT EXISTS charts (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS charts (
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+-- 6. 用户自建歌单云端分享表（支持播放器打开 & MusicFree 导入）
+CREATE TABLE IF NOT EXISTS shares (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  songs_json TEXT NOT NULL,
+  created_at INTEGER DEFAULT 0
 );
 
 INSERT OR IGNORE INTO sources (id, name, type, endpoint, priority, enabled) VALUES
