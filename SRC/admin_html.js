@@ -102,6 +102,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-10px);background:var(--card);color:var(--text);border:1px solid var(--line);padding:9px 16px;border-radius:999px;font-size:12.5px;font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.22);z-index:90;opacity:0;pointer-events:none;transition:.2s;}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
   .cfg-lbl{font-size:12px;color:var(--muted);margin-right:4px;}
+  .tip-box{margin-top:14px;padding:10px 12px;border-radius:10px;background:var(--stat);border:1px solid var(--line);font-size:12px;color:var(--muted);line-height:1.55;}
 </style>
 </head>
 <body>
@@ -136,7 +137,7 @@ var curTab = "overview", dashData = null, songRows = [], songPage = 1, lrcRows =
 function esc(s) { return String(s || "").replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
 function toast(msg) {
   var el = document.getElementById("toast"); el.textContent = msg; el.classList.add("show");
-  clearTimeout(toastTimer); toastTimer = setTimeout(function() { el.classList.remove("show"); }, 2400);
+  clearTimeout(toastTimer); toastTimer = setTimeout(function() { el.classList.remove("show"); }, 2500);
 }
 function syncThemeBtn() {
   var cur = document.documentElement.getAttribute("data-theme") || "dark";
@@ -197,7 +198,7 @@ function loadAll() {
   }).catch(function(){});
 }
 
-// -------- 订阅源与二维码 Tab --------
+// -------- 订阅源、二维码与本地文件下载 --------
 function makeQrHtml(text) {
   try {
     if (typeof qrcode === "function") {
@@ -214,6 +215,38 @@ function copyText(id, btn) {
     setTimeout(function() { btn.textContent = old; }, 1500);
   }).catch(function() { el.select(); document.execCommand("copy"); toast("已复制"); });
 }
+function saveTextAsFile(text, mime, filename) {
+  var blob = new Blob([text], { type: (mime || "text/plain") + ";charset=utf-8" });
+  var objUrl = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = objUrl; a.download = filename; a.style.display = "none";
+  document.body.appendChild(a); a.click();
+  setTimeout(function() { document.body.removeChild(a); URL.revokeObjectURL(objUrl); }, 1000);
+}
+function downloadSubFile(i) {
+  var item = window._subItems && window._subItems[i];
+  if (!item || !item.fileName) return;
+  toast("正在拉取并下载：" + item.fileName);
+  fetch(item.url).then(function(r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.text();
+  }).then(function(txt) {
+    saveTextAsFile(txt, item.mime, item.fileName);
+    toast("已下载本地文件：" + item.fileName);
+  }).catch(function(e) {
+    toast("下载失败：" + e.message);
+  });
+}
+function downloadAllSubs() {
+  var items = window._subItems || [], delay = 0;
+  for (var i = 0; i < items.length; i++) {
+    if (!items[i].fileName) continue;
+    (function(idx, d) {
+      setTimeout(function() { downloadSubFile(idx); }, d);
+    })(i, delay);
+    delay += 380;
+  }
+}
 
 function renderSubsTab() {
   var base = location.origin;
@@ -222,28 +255,30 @@ function renderSubsTab() {
   var tkSeg = encodeURIComponent(tk || "public");
   var items = [
     { id: "sub_player", title: "📱 PWA 手机 / 网页播放器", desc: "支持电台漫游、记忆目录下载、自建歌单与深浅双主题", url: base + "/player" + qs },
-    { id: "sub_mfjson", title: "🧩 MusicFree / 音悦 通用订阅源 (.json)", desc: "严格 .json 结尾；支持搜歌手/推荐歌单，及网易/QQ/汽水/酷狗/酷我歌单导入（最高1000首）", url: base + "/s/" + tkSeg + "/musicfree.json" },
-    { id: "sub_mfjs", title: "📄 MusicFree / 音悦 单插件直链 (.js)", desc: "适合直接导入单个插件脚本", url: base + "/s/" + tkSeg + "/music-hub.js" },
-    { id: "sub_lxjs", title: "❄️ 洛雪音乐 (LX Music) 自定义源 (.js)", desc: "导入到洛雪桌面版/安卓版「设置 -> 自定义源」", url: base + "/s/" + tkSeg + "/lx-source.js" },
+    { id: "sub_mfjson", title: "🧩 MusicFree / 音悦 通用订阅源 (.json)", desc: "严格 .json 结尾；支持搜歌手/推荐歌单，及网易/QQ/汽水/酷狗/酷我歌单导入（最高1000首）", url: base + "/s/" + tkSeg + "/musicfree.json", fileName: "musicfree.json", mime: "application/json" },
+    { id: "sub_mfjs", title: "📄 MusicFree / 音悦 单插件直链 (.js)", desc: "下载后可直接用于「从本地安装插件」，无需每次填订阅 URL", url: base + "/s/" + tkSeg + "/music-hub.js", fileName: "music-hub.js", mime: "application/javascript" },
+    { id: "sub_lxjs", title: "❄️ 洛雪音乐 (LX Music) 自定义源 (.js)", desc: "下载后可直接导入洛雪桌面版/安卓版「设置 -> 自定义源」", url: base + "/s/" + tkSeg + "/lx-source.js", fileName: "lx-source.js", mime: "application/javascript" },
     { id: "sub_diag", title: "🩺 全源并发体检接口", desc: "实时查看服务器到各大音源的真实播放解析连通率与耗时", url: base + "/api/diag" + qs },
   ];
-  window._subUrls = items.map(function(x) { return x.url; });
+  window._subItems = items;
 
-  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' +
-    '<div><h3>多端订阅地址 & 本地二维码</h3><p style="font-size:12px;color:var(--muted);margin:0;">当前访问密钥 (ACCESS_TOKEN)：' + (tk ? '<span class="badge ok">已自动嵌入路径</span>' : '<span class="badge miss">未配置（免密模式）</span>') + '</p></div>' +
+  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">' +
+    '<div><h3 style="margin-bottom:4px;">多端订阅地址、二维码 & 本地文件下载</h3><p style="font-size:12px;color:var(--muted);margin:0;">当前访问密钥 (ACCESS_TOKEN)：' + (tk ? '<span class="badge ok">已自动嵌入路径与本地脚本</span>' : '<span class="badge miss">未配置（免密模式）</span>') + '</p></div>' +
+    '<button class="sm green" onclick="downloadAllSubs()">⬇ 一键下载全部源文件</button>' +
     '</div><div class="sub-grid">';
 
   for (var i = 0; i < items.length; i++) {
     var it = items[i];
+    var dlBtn = it.fileName ? '<button class="sm green" onclick="downloadSubFile(' + i + ')">⬇ 下载本地文件</button>' : '';
     h += '<div class="sub-card"><div class="qr-box">' + makeQrHtml(it.url) + '</div>' +
       '<div style="flex:1;min-width:0;">' +
       '<div style="font-weight:700;font-size:14px;margin-bottom:3px;">' + it.title + '</div>' +
       '<div style="font-size:11.5px;color:var(--muted);margin-bottom:8px;line-height:1.4;">' + it.desc + '</div>' +
       '<input id="' + it.id + '" value="' + esc(it.url) + '" readonly style="width:100%;font-size:12px;margin-bottom:8px;" onclick="this.select()" />' +
-      '<div style="display:flex;gap:6px;"><button class="sm" onclick="copyText(\\'' + it.id + '\\',this)">复制链接</button>' +
-      '<button class="sm ghost" onclick="window.open(window._subUrls[' + i + '],\\'_blank\\')">打开测试</button></div></div></div>';
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;"><button class="sm" onclick="copyText(\\'' + it.id + '\\',this)">复制链接</button>' + dlBtn +
+      '<button class="sm ghost" onclick="window.open(window._subItems[' + i + '].url,\\'_blank\\')">打开测试</button></div></div></div>';
   }
-  h += '</div></div>';
+  h += '</div><div class="tip-box">💡 <b>本地文件导入说明：</b>下载下来的 <code>music-hub.js</code> 和 <code>lx-source.js</code> 内部均已自动写入服务器地址与访问密钥，可直接发到手机，在 <b>MusicFree（从本地安装）</b>、<b>音悦（导入本地源）</b> 或 <b>洛雪音乐（导入本地自定义源）</b> 中离线导入使用。</div></div>';
   document.getElementById("main").innerHTML = h;
 }
 
@@ -252,7 +287,7 @@ function renderOverview() {
   var sc = dashData.syncConfig || { enabled: true, lrcLimit: 450, chartMax: 120, lastSyncAt: 0, lastSyncSummary: "暂无同步记录" };
   var lastTimeStr = sc.lastSyncAt ? new Date(sc.lastSyncAt * 1000).toLocaleString("zh-CN") : "尚未运行";
 
-  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><h3>曲库概览</h3><button class="sm green" onclick="switchTab(\\'subs\\')">查看多端订阅源 & 二维码</button></div>' +
+  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><h3>曲库概览</h3><button class="sm green" onclick="switchTab(\\'subs\\')">查看订阅源 / 下载本地文件</button></div>' +
     '<div class="grid"><div class="stat"><b>' + (st.songs||0) + '</b><span>可用歌曲</span></div><div class="stat"><b>' + (st.charts||0) + '</b><span>精选榜单</span></div><div class="stat"><b>' + (st.lyrics||0) + ' (' + pct + '%)</b><span>歌词覆盖率</span></div><div class="stat"><b>' + (st.blocked||0) + '</b><span>已屏蔽</span></div></div><div style="margin-top:14px;">' + (dashData.categories || []).map(function(c) { return '<span class="badge">' + esc(c.category) + ': ' + c.c + '首</span>'; }).join("") + '</div></div>';
 
   var srcs = dashData.sources || [];
