@@ -102,7 +102,15 @@ const SHEET_TAGS = [
   { id: "说唱", title: "说唱" }, { id: "轻音乐", title: "轻音乐" }, { id: "影视原声", title: "影视原声" },
 ];
 
+const BILI_MIXIN_TAB = [
+  46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33,
+  9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26,
+  17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34,
+  44, 52,
+];
+
 let runtimeCfgCache = { ts: 0, junkWords: DEFAULT_JUNK_WORDS, sources: [] };
+let biliAuthCache = { buvid3: "", buvid4: "", imgKey: "", subKey: "", ts: 0 };
 
 async function getRuntimeCfg(env) {
   const now = Date.now();
@@ -151,7 +159,7 @@ function html(body, status = 200, extraHeaders = {}) {
 }
 async function withEdgeCache(ctx, keyPath, ttlSec, fn) {
   const cache = caches.default;
-  const cacheKey = new Request("https://cache.internal/v6" + keyPath);
+  const cacheKey = new Request("https://cache.internal/v7" + keyPath);
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
   const resp = await fn(ttlSec);
@@ -159,7 +167,7 @@ async function withEdgeCache(ctx, keyPath, ttlSec, fn) {
   return resp;
 }
 async function purgeHomeCache(ctx) {
-  ctx.waitUntil(caches.default.delete(new Request("https://cache.internal/v6/home")));
+  ctx.waitUntil(caches.default.delete(new Request("https://cache.internal/v7/home")));
 }
 
 function getTokenFromReq(request, pathToken = "") {
@@ -199,7 +207,7 @@ async function verifyNot30sTrial(url, durationSec, extraHdrs = {}) {
       method: "GET",
       headers: { "User-Agent": UA, Range: "bytes=0-0", ...extraHdrs },
       redirect: "follow",
-    }, 2000);
+    }, 3500);
     try { await res.body?.cancel(); } catch {}
     if (res.url && res.url.includes("/404")) return null;
     if (res.status !== 200 && res.status !== 206) return null;
@@ -412,16 +420,10 @@ async function fetchQishuiPlaylistDetail(pid, limit = 1000) {
         seen.add(nk);
         const rawDur = Number(t?.duration || 0);
         songs.push({
-          id: 0,
-          norm_key: nk,
-          title: name,
-          artist: artists,
-          album: t?.album?.name || "",
+          id: 0, norm_key: nk, title: name, artist: artists, album: t?.album?.name || "",
           cover: t?.album?.url_cover?.urls?.[0] || t?.cover?.urls?.[0] || cover,
           duration: rawDur > 10000 ? Math.round(rawDur / 1000) : Math.round(rawDur),
-          category: "导入歌单",
-          ext_source: "qishui",
-          ext_id: String(t?.id || item?.id || nk),
+          category: "导入歌单", ext_source: "qishui", ext_id: String(t?.id || item?.id || nk),
         });
         if (songs.length >= limit) break;
       }
@@ -430,7 +432,6 @@ async function fetchQishuiPlaylistDetail(pid, limit = 1000) {
     } catch { break; }
   }
 
-  // 若 PC API 受限，降级抓取汽水分享页内嵌 _ROUTER_DATA
   if (!songs.length) {
     try {
       const hr = await fetchTimeout(`https://music.douyin.com/qishui/share/playlist?playlist_id=${encodeURIComponent(pid)}`, { headers: { "User-Agent": UA } }, 6000);
@@ -538,7 +539,6 @@ async function importExternalPlaylist(urlLike, env) {
   let raw = String(urlLike || "").trim();
   if (!raw) return null;
 
-  // 若输入包含分享文案（如汽水/网易云自带文字），提取其中的 URL
   const urlInText = raw.match(/https?:\/\/[^\s]+/i);
   if (urlInText) raw = urlInText[0];
 
@@ -557,27 +557,22 @@ async function importExternalPlaylist(urlLike, env) {
     } catch {}
   }
 
-  // 1. 汽水音乐
   if (raw.includes("qishui") || raw.includes("douyin.com")) {
     const qsm = raw.match(/playlist_id=(\d+)/) || raw.match(/playlist\/(\d+)/);
     if (qsm) return await fetchQishuiPlaylistDetail(qsm[1], 1000);
   }
-  // 2. 酷狗音乐
   if (raw.includes("kugou.com")) {
     const kgm = raw.match(/special\/single\/(\d+)/) || raw.match(/songlist\/(\d+)/) || raw.match(/specialid=(\d+)/);
     if (kgm) return await fetchKugouPlaylistDetail(kgm[1], 1000);
   }
-  // 3. 酷我音乐
   if (raw.includes("kuwo.cn")) {
     const kwm = raw.match(/playlist_detail\/(\d+)/) || raw.match(/[?&]pid=(\d+)/);
     if (kwm) return await fetchKuwoPlaylistDetail(kwm[1], 1000);
   }
-  // 4. QQ音乐
   if (raw.includes("y.qq.com") || raw.includes("qq.com")) {
     const qm = raw.match(/playlist\/(\d+)/) || raw.match(/[?&]id=(\d+)/) || raw.match(/disstid=(\d+)/);
     if (qm) return await fetchQQPlaylistDetail(qm[1], 1000);
   }
-  // 5. 网易云音乐（链接或纯数字 ID）
   const nm = raw.match(/(?:playlist\/|[?&]id=)(\d{5,15})/) || raw.match(/^(\d{5,15})$/);
   if (nm) return await fetchNeteasePlaylistDetail(nm[1], 1000);
 
@@ -614,7 +609,7 @@ async function fetchNeteaseSimiSheets(songId) {
 
 async function getSceneRadioPool(mode, env, ctx, junkList) {
   const cache = caches.default;
-  const cacheKey = new Request(`https://cache.internal/v6/radio_pool/${mode}`);
+  const cacheKey = new Request(`https://cache.internal/v7/radio_pool/${mode}`);
   const hit = await cache.match(cacheKey);
   if (hit) {
     const data = await hit.json().catch(() => null);
@@ -782,7 +777,7 @@ async function liveSearchAlbums(query, limit = 24, page = 1) {
 async function searchKuwoRid(kw, title, junkList) {
   const sr = await fetchTimeout(
     `https://search.kuwo.cn/r.s?all=${encodeURIComponent(kw)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=6&rformat=json&encoding=utf8`,
-    { headers: { "User-Agent": UA } }, 2400
+    { headers: { "User-Agent": UA } }, 2800
   );
   const txt = await sr.text();
   const matches = [...txt.matchAll(/MUSIC_(\d+)/g)].map((m) => m[1]);
@@ -808,7 +803,7 @@ async function raceKuwoAll(song, ids, trace, junkList = DEFAULT_JUNK_WORDS) {
 
   try {
     return await Promise.any(kuwoUrls.map(async (ep) => {
-      const r = await fetchTimeout(ep, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, 2600);
+      const r = await fetchTimeout(ep, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, 3200);
       const txt = await r.text();
       let u = "", ekey = "", dur = 0;
       try { const j = JSON.parse(txt); u = j?.data?.url || j?.url || ""; ekey = j?.data?.ekey || ""; dur = Number(j?.data?.duration || 0); }
@@ -828,27 +823,30 @@ async function raceGDStudio(song, ids, trace, endpoint = "https://music-api.gdst
   const base = `${endpoint.replace(/\?.*$/, "")}?use_xbridge3=true`;
   const hdrs = { "User-Agent": UA, Accept: "application/json", Referer: "https://music.gdstudio.xyz/", Origin: "https://music.gdstudio.xyz" };
 
-  const tasks = ["kuwo", "joox"].map(async (plat) => {
-    const sr = await fetchTimeout(`${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=5&pages=1`, { headers: hdrs }, 2600);
+  const tasks = ["kuwo", "kugou", "tencent", "joox"].map(async (plat) => {
+    const sr = await fetchTimeout(`${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`, { headers: hdrs }, 3500);
     if (!sr.ok) throw new Error(`gd_s_${sr.status}`);
     const arr = await sr.json();
     if (!Array.isArray(arr) || !arr.length) throw new Error("gd_no_id");
-    const picked = arr.find((x) => !isJunkTitle(x.name, song.title, junkList)) || arr[0];
-    const pid = picked?.id;
-    if (!pid) throw new Error("gd_no_id");
-    const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(pid)}&br=320`, { headers: hdrs }, 2600);
-    if (!ur.ok) throw new Error(`gd_u_${ur.status}`);
-    const d = await ur.json();
-    if (!isBasicAudioUrl(d?.url)) throw new Error("gd_no_url");
-    if (d.size && song.duration >= 90 && Number(d.size) < 1300) throw new Error("gd_trial_size");
-    const real = await verifyNot30sTrial(d.url, song.duration);
-    if (!real) throw new Error("gd_trial");
-    return { url: real, source: `gd:${plat}` };
+    const cands = arr.filter((x) => !isJunkTitle(x.name, song.title, junkList)).slice(0, 2);
+    if (!cands.length) cands.push(arr[0]);
+
+    for (const cand of cands) {
+      if (!cand?.id) continue;
+      const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(cand.id)}&br=320`, { headers: hdrs }, 3500);
+      if (!ur.ok) continue;
+      const d = await ur.json();
+      if (!isBasicAudioUrl(d?.url)) continue;
+      if (d.size && song.duration >= 90 && Number(d.size) < 1300) continue;
+      const real = await verifyNot30sTrial(d.url, song.duration);
+      if (real) return { url: real, source: `gd:${plat}` };
+    }
+    throw new Error("gd_trial");
   });
 
   if (ids.netease) {
     tasks.push((async () => {
-      const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${ids.netease}&br=320`, { headers: hdrs }, 2600);
+      const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${ids.netease}&br=320`, { headers: hdrs }, 3500);
       if (!ur.ok) throw new Error(`gd_ne_${ur.status}`);
       const d = await ur.json();
       if (d?.size && song.duration >= 90 && Number(d.size) < 1300) throw new Error("gd_ne_size");
@@ -867,7 +865,7 @@ async function raceVKeys(song, ids, trace, endpoint = "https://api.vkeys.cn/v2/m
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
   const base = endpoint.replace(/\/$/, "");
   const tasks = [3, 2].map(async (q) => {
-    const r = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}&n=1&quality=${q}`, { headers: { "User-Agent": UA } }, 2800);
+    const r = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}&n=1&quality=${q}`, { headers: { "User-Agent": UA } }, 3500);
     const d = await r.json();
     const real = await verifyNot30sTrial(d?.data?.url, song.duration);
     if (!real) throw new Error("vk_qq_empty");
@@ -875,7 +873,7 @@ async function raceVKeys(song, ids, trace, endpoint = "https://api.vkeys.cn/v2/m
   });
   if (ids.netease) {
     tasks.push((async () => {
-      const r = await fetchTimeout(`${base}/netease?id=${ids.netease}&quality=3`, { headers: { "User-Agent": UA } }, 2800);
+      const r = await fetchTimeout(`${base}/netease?id=${ids.netease}&quality=3`, { headers: { "User-Agent": UA } }, 3500);
       const d = await r.json();
       const real = await verifyNot30sTrial(d?.data?.url, song.duration);
       if (!real) throw new Error("vk_ne_30s");
@@ -888,13 +886,123 @@ async function raceVKeys(song, ids, trace, endpoint = "https://api.vkeys.cn/v2/m
 
 async function raceMeting(baseUrl, tag, neteaseId, durationSec, trace) {
   if (!neteaseId) throw new Error("no_id");
-  const r = await fetchTimeout(`${baseUrl}?server=netease&type=song&id=${neteaseId}`, { headers: { "User-Agent": UA } }, 2400);
+  const r = await fetchTimeout(`${baseUrl}?server=netease&type=song&id=${neteaseId}`, { headers: { "User-Agent": UA } }, 2800);
   if (!r.ok) { trace.push(`${tag}:${r.status}`); throw new Error(r.status); }
   const arr = await r.json();
   const u = Array.isArray(arr) ? arr[0]?.url : arr?.url;
   const real = await verifyNot30sTrial(u, durationSec);
   if (!real) { trace.push(`${tag}:30s`); throw new Error("trial"); }
   return { url: real, source: tag };
+}
+
+// ---------- B站 WBI 音频流终极兜底 ----------
+async function getBiliAuth(apiBase = "https://api.bilibili.com") {
+  const now = Date.now();
+  if (biliAuthCache.buvid3 && biliAuthCache.imgKey && now - biliAuthCache.ts < 1800 * 1000) {
+    return biliAuthCache;
+  }
+  const base = apiBase.replace(/\/$/, "");
+  const hdrs = { "User-Agent": UA, Referer: "https://www.bilibili.com/" };
+  const [spiRes, navRes] = await Promise.all([
+    fetchTimeout(`${base}/x/frontend/finger/spi`, { headers: hdrs }, 4000).then((r) => r.json()).catch(() => ({})),
+    fetchTimeout(`${base}/x/web-interface/nav`, { headers: hdrs }, 4000).then((r) => r.json()).catch(() => ({})),
+  ]);
+  const spi = spiRes?.data || {};
+  const wbi = navRes?.data?.wbi_img || {};
+  const imgKey = (wbi.img_url || "").split("/").pop().split(".")[0];
+  const subKey = (wbi.sub_url || "").split("/").pop().split(".")[0];
+  if (!imgKey || !subKey) return null;
+  biliAuthCache = { buvid3: spi.b_3 || "", buvid4: spi.b_4 || "", imgKey, subKey, ts: now };
+  return biliAuthCache;
+}
+
+async function signBiliWbi(params, imgKey, subKey) {
+  const orig = imgKey + subKey;
+  const mixinKey = BILI_MIXIN_TAB.map((i) => orig[i] || "").join("").slice(0, 32);
+  const all = { ...params, wts: Math.floor(Date.now() / 1000) };
+  const query = Object.keys(all)
+    .sort()
+    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(all[k]).replace(/[!'()*]/g, ""))}`)
+    .join("&");
+  const w_rid = await digestHex("MD5", query + mixinKey);
+  return `${query}&w_rid=${w_rid}`;
+}
+
+function parseBiliDur(str) {
+  if (!str) return 0;
+  const p = String(str).split(":").map(Number);
+  if (p.length === 2) return p[0] * 60 + p[1];
+  if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  return 0;
+}
+
+async function fallbackBilibiliAudio(song, ids, trace, apiBase = "https://api.bilibili.com", junkList = DEFAULT_JUNK_WORDS) {
+  try {
+    const base = apiBase.replace(/\/$/, "");
+    const auth = await getBiliAuth(base);
+    const cookie = auth ? `buvid3=${auth.buvid3}; buvid4=${auth.buvid4}` : "";
+    let bvid = ids.bili || "";
+
+    if (!bvid) {
+      if (!auth) { trace.push("bili:no_auth"); return null; }
+      const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
+      const keyword = `${normalizeName(song.title)} ${cleanArtist}`.trim();
+      const qs = await signBiliWbi({ search_type: "video", keyword, page: 1, page_size: 10 }, auth.imgKey, auth.subKey);
+      const sr = await fetchTimeout(`${base}/x/web-interface/wbi/search/type?${qs}`, {
+        headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/", Cookie: cookie },
+      }, 4500);
+      const sd = await sr.json().catch(() => ({}));
+      const list = sd?.data?.result || [];
+      if (!list.length) { trace.push("bili:no_res"); return null; }
+
+      const cleanList = list.filter((it) => {
+        const t = String(it.title || "").replace(/<[^>]+>/g, "");
+        return !isJunkTitle(t, song.title, junkList);
+      });
+      const candList = cleanList.length ? cleanList : list;
+      let picked = candList[0];
+      if (song.duration > 0) {
+        const best = candList.find((it) => {
+          const d = parseBiliDur(it.duration);
+          return d > 30 && d < 600 && Math.abs(d - song.duration) <= 22;
+        });
+        if (best) picked = best;
+      }
+      bvid = picked?.bvid || "";
+    }
+    if (!bvid) { trace.push("bili:no_bvid"); return null; }
+
+    const pr = await fetchTimeout(`${base}/x/player/pagelist?bvid=${encodeURIComponent(bvid)}`, {
+      headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" },
+    }, 4000);
+    const pd = await pr.json().catch(() => ({}));
+    const cid = pd?.data?.[0]?.cid;
+    if (!cid) { trace.push("bili:no_cid"); return null; }
+
+    // 优先取 DASH 独立音频流，若空则降级取 MP4 流
+    for (const fnval of [4048, 1]) {
+      const playRes = await fetchTimeout(
+        `${base}/x/player/playurl?bvid=${encodeURIComponent(bvid)}&cid=${cid}&qn=64&fnval=${fnval}&otype=json`,
+        { headers: { "User-Agent": UA, Referer: `https://www.bilibili.com/video/${bvid}`, Cookie: cookie } },
+        4500
+      );
+      const pld = await playRes.json().catch(() => ({}));
+      const audios = pld?.data?.dash?.audio || [];
+      if (audios.length) {
+        audios.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+        for (const st of audios) {
+          const u = st.baseUrl || st.base_url || (st.backupUrl && st.backupUrl[0]);
+          if (u) return { url: u, source: "bili", biliId: bvid, needProxy: true, headers: { Referer: "https://www.bilibili.com/", "User-Agent": UA } };
+        }
+      }
+      const durl = pld?.data?.durl?.[0]?.url;
+      if (durl) return { url: durl, source: "bili", biliId: bvid, needProxy: true, headers: { Referer: "https://www.bilibili.com/", "User-Agent": UA } };
+    }
+    trace.push("bili:no_stream");
+  } catch (e) {
+    trace.push("bili:err");
+  }
+  return null;
 }
 
 async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
@@ -931,8 +1039,16 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
     }
   }
 
-  try { const winner = await Promise.any(raceList); return { ...winner, trace }; }
-  catch { return { error: "可用完整源均未命中", trace }; }
+  try {
+    const winner = await Promise.any(raceList);
+    return { ...winner, trace };
+  } catch {
+    if (!hasAnyCfg || srcMap.has("bili")) {
+      const biliHit = await fallbackBilibiliAudio(song, ids, trace, srcMap.get("bili")?.endpoint || "https://api.bilibili.com", cfg.junkWords);
+      if (biliHit) return { ...biliHit, trace };
+    }
+    return { error: "可用完整源均未命中", trace };
+  }
 }
 
 async function fetchLiveLyric(extSource, extId, title, artist) {
@@ -1112,7 +1228,7 @@ export default {
           const chartTitle = String(body.chartTitle || detail.title || "导入歌单").trim();
           await env.DB.prepare(`INSERT INTO charts (id,title,category,cover,description,song_ids_json,sort_order,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,category=excluded.category,cover=excluded.cover,song_ids_json=excluded.song_ids_json,updated_at=excluded.updated_at`).bind(`ne_${pid}`, chartTitle, chartCat, detail.cover, detail.description.slice(0, 120), JSON.stringify(songIds), 45, now).run();
           await purgeHomeCache(ctx);
-          ctx.waitUntil(caches.default.delete(new Request("https://cache.internal/v6/chart/" + encodeURIComponent("ne_" + pid))));
+          ctx.waitUntil(caches.default.delete(new Request("https://cache.internal/v7/chart/" + encodeURIComponent("ne_" + pid))));
           return json({ ok: true, title: chartTitle, importedCount: songIds.length });
         }
         if (path === "/api/admin/chart/update" && request.method === "POST") {
@@ -1186,6 +1302,7 @@ export default {
         if (!isSafeExternalUrl(target)) return json({ error: "invalid stream url" }, 400);
         const fwdHeaders = new Headers({ "User-Agent": UA });
         if (src.includes("kuwo") || target.includes("kuwo")) fwdHeaders.set("Referer", "https://www.kuwo.cn/");
+        else if (src.includes("bili") || target.includes("bilivideo") || target.includes("biliapi") || target.includes("akamaized.net")) fwdHeaders.set("Referer", "https://www.bilibili.com/");
         const range = request.headers.get("Range"); if (range && !isDl) fwdHeaders.set("Range", range);
 
         let upstream = await fetch(target, { headers: fwdHeaders, redirect: "manual" });
@@ -1224,11 +1341,17 @@ export default {
           ["gdstudio_xbridge", raceGDStudio(song, { netease: "190449" }, [])],
           ["vkeys", raceVKeys(song, { netease: "190449" }, [])],
           ["meting_injahow", raceMeting("https://api.injahow.cn/meting/", "injahow", "190449", 297, [])],
+          ["bili_wbi", fallbackBilibiliAudio({ title: "稻香", artist: "周杰伦", duration: 223 }, {}, [])],
         ];
         const report = await Promise.all(tests.map(async ([name, p]) => {
           const t0 = Date.now();
-          try { const r = await p; return { name, ok: true, ms: Date.now() - t0, source: r.source, url: r.url.slice(0, 70) }; }
-          catch (e) { return { name, ok: false, ms: Date.now() - t0, error: e.message }; }
+          try {
+            const r = await p;
+            if (!r || !r.url) return { name, ok: false, ms: Date.now() - t0, error: "empty" };
+            return { name, ok: true, ms: Date.now() - t0, source: r.source, url: r.url.slice(0, 70) };
+          } catch (e) {
+            return { name, ok: false, ms: Date.now() - t0, error: e.message };
+          }
         }));
         return json({ report });
       }
@@ -1444,7 +1567,7 @@ export default {
         }
         if (!song) return json({ error: "not found" }, 404);
 
-        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v6/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
+        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v7/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
         let resolved = null;
         if (!force) {
           const cached = await cache.match(cacheKey);
@@ -1453,9 +1576,12 @@ export default {
         if (!resolved) {
           resolved = await resolvePlayUrl(song, quality, env, prefer, skip);
           if (resolved.error) return json(resolved, 502);
-          if (resolved.kuwoId) {
+          if (resolved.kuwoId || resolved.biliId) {
             const ids = JSON.parse(song.source_ids_json || "{}");
-            if (!ids.kuwo) { ids.kuwo = resolved.kuwoId; ctx.waitUntil(env.DB.prepare("UPDATE songs SET source_ids_json = ? WHERE id = ?").bind(JSON.stringify(ids), id).run()); }
+            let changed = false;
+            if (resolved.kuwoId && !ids.kuwo) { ids.kuwo = resolved.kuwoId; changed = true; }
+            if (resolved.biliId && !ids.bili) { ids.bili = resolved.biliId; changed = true; }
+            if (changed) ctx.waitUntil(env.DB.prepare("UPDATE songs SET source_ids_json = ? WHERE id = ?").bind(JSON.stringify(ids), id).run());
           }
           ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(resolved), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=900" } })));
         }
@@ -1515,7 +1641,7 @@ function raceFirst(tasks) {
 module.exports = {
   platform: "MusicHub·自建云端",
   author: "MusicHub",
-  version: "2.2.0",
+  version: "2.3.0",
   cacheControl: "no-cache",
   supportedSearchType: ["music", "album", "artist", "sheet"],
   hints: {
@@ -1631,7 +1757,7 @@ module.exports = {
         var d = r.data;
         if (!d || !d.url || d.url.indexOf("panspace") >= 0 || !isFullSize(d.size)) return Promise.reject("trial");
         if (dur >= 90) {
-          return axios.get(d.url, { headers: Object.assign({ Range: "bytes=0-0" }, hdrs), timeout: 2500 }).then(function(hr) {
+          return axios.get(d.url, { headers: Object.assign({ Range: "bytes=0-0" }, hdrs), timeout: 3000 }).then(function(hr) {
             var cr = (hr.headers && hr.headers["content-range"]) || "";
             var m = cr.match(new RegExp("/(\\\\d+)"));
             var cl = m ? Number(m[1]) : Number((hr.headers && hr.headers["content-length"]) || 0);
@@ -1648,13 +1774,13 @@ module.exports = {
 
     try {
       if (String(item.artist || "").indexOf("塞壬") < 0) {
-        return await raceFirst([tryGD("kuwo"), tryGD("joox"), tryGD("netease")]);
+        return await raceFirst([tryGD("kuwo"), tryGD("kugou"), tryGD("joox"), tryGD("netease")]);
       }
     } catch (e) {}
 
     const { data } = await axios.get(BASE + "/api/play", {
       params: { id: item.id || 0, q: quality || "high", ext_source: item.ext_source, ext_id: item.ext_id, title: item.title, artist: item.artist, album: item.album, cover: item.artwork, duration: item.duration },
-      headers: H, timeout: 12000
+      headers: H, timeout: 16000
     });
     if (data.needProxy && data.proxyUrl) return { url: data.proxyUrl };
     return { url: data.url, headers: data.headers };
@@ -1699,8 +1825,8 @@ module.exports = {
         const base = `${url.protocol}//${url.host}`;
         const lxCode = `/*!
  * @name MusicHub·自建云端
- * @description 基于 Music Hub Worker 的洛雪音乐自定义源（多源并发 + 防30秒试听）
- * @version 2.2.0
+ * @description 基于 Music Hub Worker 的洛雪音乐自定义源（多源并发 + 防30秒试听 + B站WBI兜底）
+ * @version 2.3.0
  * @author MusicHub
  */
 const { EVENT_NAMES, request, on, send } = globalThis.lx;
@@ -1733,7 +1859,7 @@ on(EVENT_NAMES.request, ({ source, action, info }) => {
     + (TOKEN ? "&token=" + encodeURIComponent(TOKEN) : "");
 
   return new Promise((resolve, reject) => {
-    request(BASE + "/api/play" + qs, { method: "GET", timeout: 15000 }, (err, resp) => {
+    request(BASE + "/api/play" + qs, { method: "GET", timeout: 16000 }, (err, resp) => {
       if (err) return reject(err);
       var data = resp && resp.body;
       if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) {} }
@@ -1758,7 +1884,7 @@ send(EVENT_NAMES.inited, {
         const tkSeg = encodeURIComponent(env.ACCESS_TOKEN || "public");
         return json({
           plugins: [
-            { name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/s/${tkSeg}/music-hub.js`, version: "2.2.0" },
+            { name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/s/${tkSeg}/music-hub.js`, version: "2.3.0" },
           ],
         });
       }
