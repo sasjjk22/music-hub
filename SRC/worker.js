@@ -560,7 +560,7 @@ async function searchKuwoRid(song, junkList) {
     const sc = scoreCandidate(name, artist, song.title, song.artist, dur, song.duration, junkList);
     if (sc > bestScore) { bestScore = sc; bestRid = rid; }
   }
-  return (bestScore > -60 && bestRid) ? bestRid : fallbackRid;
+  return (bestScore > -60 && bestRid) ? bestRid : "";
 }
 
 async function raceKuwoAll(song, ids, trace, junkList = DEFAULT_JUNK_WORDS) {
@@ -801,15 +801,20 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
     try { const u = (await (await fetchTimeout(`${msrBase}/song/${ids.msr}`, {}, 3000)).json())?.data?.sourceUrl; if (u) return { url: u, source: "msr", trace }; } catch { trace.push("msr:err"); }
   }
 
+  const skipSet = new Set(String(skip || "").split(",").map((x) => x.trim()).filter(Boolean));
+  if (skipSet.has("kuwo") && ids.kuwo) {
+    delete ids.kuwo;
+    song = { ...song, source_ids_json: JSON.stringify(ids) };
+  }
   const raceList = [];
   if (prefer === "kuwo") {
     raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords));
   } else {
-    raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords));
-    raceList.push(raceGequbao(song, trace, cfg.junkWords));
-    if (isEnabled("vkeys")) raceList.push(raceVKeys(song, ids, trace, srcMap.get("vkeys")?.endpoint || "https://api.vkeys.cn/v2/music", cfg.junkWords));
-    if (isEnabled("gdstudio")) raceList.push(raceGDStudio(song, ids, trace, srcMap.get("gdstudio")?.endpoint || "https://music-api.gdstudio.xyz/api.php", cfg.junkWords));
-    if (skip !== "meting" && ids.netease) raceList.push(raceMeting("https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, trace));
+    if (!skipSet.has("kuwo")) raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords));
+    if (!skipSet.has("gequbao")) raceList.push(raceGequbao(song, trace, cfg.junkWords));
+    if (!skipSet.has("vkeys") && isEnabled("vkeys")) raceList.push(raceVKeys(song, ids, trace, srcMap.get("vkeys")?.endpoint || "https://api.vkeys.cn/v2/music", cfg.junkWords));
+    if (!skipSet.has("gd") && !skipSet.has("gdstudio") && isEnabled("gdstudio")) raceList.push(raceGDStudio(song, ids, trace, srcMap.get("gdstudio")?.endpoint || "https://music-api.gdstudio.xyz/api.php", cfg.junkWords));
+    if (!skipSet.has("meting") && ids.netease) raceList.push(raceMeting("https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, trace));
   }
 
   try {
@@ -1245,6 +1250,10 @@ export default {
         const cache = caches.default, cacheKey = new Request(`https://cache.internal/v10/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
         let resolved = null;
         if (!force) { const cached = await cache.match(cacheKey); if (cached) resolved = await cached.json().catch(() => null); }
+        if (force && skip.includes("kuwo")) {
+          const oldIds = JSON.parse(song.source_ids_json || "{}");
+          if (oldIds.kuwo) { delete oldIds.kuwo; ctx.waitUntil(env.DB.prepare("UPDATE songs SET source_ids_json = ? WHERE id = ?").bind(JSON.stringify(oldIds), id).run()); }
+        }
         if (!resolved) {
           resolved = await resolvePlayUrl(song, quality, env, prefer, skip);
           if (resolved.error) return json(resolved, 502);
