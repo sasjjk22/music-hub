@@ -121,7 +121,7 @@ async function getRuntimeCfg(env) {
 }
 function invalidateCfgCache() { runtimeCfgCache.ts = 0; }
 
-function fetchTimeout(url, opts = {}, ms = 4000) { return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) }); }
+function fetchTimeout(url, opts = {}, ms = 4500) { return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) }); }
 function httpsCover(u) {
   if (!u || typeof u !== "string") return "";
   if (u.startsWith("http://") && u.includes("music.126.net")) return "https://" + u.slice(7);
@@ -304,13 +304,13 @@ async function fetchRecommendSheets(cat = "全部", limit = 24, page = 1) {
   return liveSearchSheets(cat && cat !== "全部" ? cat : "华语精选", limit, page);
 }
 
-async function fetchNeteasePlaylistDetail(pid, limit = 150) {
+async function fetchNeteasePlaylistDetail(pid, limit = 1000) {
   for (const ep of [
-    `https://music.163.com/api/v6/playlist/detail?id=${pid}&n=${limit}`,
+    `https://music.163.com/api/v6/playlist/detail?id=${pid}&n=${Math.min(limit, 500)}`,
     `https://music.163.com/api/playlist/detail?id=${pid}`,
   ]) {
     try {
-      const d = await (await fetchTimeout(ep, { headers: NE_HEADERS }, 6000)).json();
+      const d = await (await fetchTimeout(ep, { headers: NE_HEADERS }, 7000)).json();
       const pl = d?.playlist || d?.result;
       if (!pl) continue;
       let rawTracks = Array.isArray(pl.tracks) ? pl.tracks.slice() : [];
@@ -321,18 +321,28 @@ async function fetchNeteasePlaylistDetail(pid, limit = 150) {
         const missingIds = allIds.slice(0, limit).filter((tid) => !haveIds.has(String(tid)));
         if (missingIds.length) {
           const batches = [];
-          for (let i = 0; i < missingIds.length; i += 80) {
-            const chunk = missingIds.slice(i, i + 80);
-            const cParam = encodeURIComponent(JSON.stringify(chunk.map((tid) => ({ id: tid }))));
+          for (let i = 0; i < missingIds.length; i += 200) {
+            const chunk = missingIds.slice(i, i + 200);
             batches.push(
-              fetchTimeout(`https://music.163.com/api/v3/song/detail?c=${cParam}`, { headers: NE_HEADERS }, 5500)
+              fetchTimeout("https://music.163.com/api/v3/song/detail", {
+                method: "POST",
+                headers: { ...NE_HEADERS, "Content-Type": "application/x-www-form-urlencoded" },
+                body: "c=" + encodeURIComponent(JSON.stringify(chunk.map((tid) => ({ id: tid })))),
+              }, 7000)
                 .then((r) => r.json())
                 .then((sd) => sd?.songs || [])
                 .catch(() => [])
             );
           }
           const extraLists = await Promise.all(batches);
-          for (const lst of extraLists) rawTracks = rawTracks.concat(lst);
+          for (const lst of extraLists) {
+            for (const s of lst) {
+              if (!haveIds.has(String(s.id))) {
+                haveIds.add(String(s.id));
+                rawTracks.push(s);
+              }
+            }
+          }
         }
       }
 
@@ -348,11 +358,11 @@ async function fetchNeteasePlaylistDetail(pid, limit = 150) {
   return null;
 }
 
-async function fetchQQPlaylistDetail(tid) {
+async function fetchQQPlaylistDetail(tid, limit = 1000) {
   try {
     const r = await fetchTimeout(
       `https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?type=1&json=1&utf8=1&onlysong=0&new_format=1&disstid=${encodeURIComponent(tid)}&format=json`,
-      { headers: { "User-Agent": UA, Referer: "https://y.qq.com/" } }, 5500
+      { headers: { "User-Agent": UA, Referer: "https://y.qq.com/" } }, 6500
     );
     const data = await r.json();
     const cd = data?.cdlist?.[0];
@@ -360,7 +370,7 @@ async function fetchQQPlaylistDetail(tid) {
     return {
       id: `qq_${tid}`, title: cd.dissname || "QQ音乐歌单", artist: cd.nickname || "QQ音乐",
       cover: cd.logo || "", description: (cd.desc || "").replace(/<[^>]+>/g, "").slice(0, 160),
-      songs: cd.songlist.slice(0, 150).map((s) => {
+      songs: cd.songlist.slice(0, limit).map((s) => {
         const artists = (s.singer || []).map((a) => a.name).filter(Boolean).join(" / ") || "未知歌手";
         const albumMid = s.album?.mid || "";
         return {
@@ -374,9 +384,163 @@ async function fetchQQPlaylistDetail(tid) {
   } catch { return null; }
 }
 
+async function fetchQishuiPlaylistDetail(pid, limit = 1000) {
+  const songs = [], seen = new Set();
+  let title = "汽水音乐歌单", cover = "", description = "", cursor = "0";
+  const hdrs = { "User-Agent": UA, Referer: "https://music.douyin.com/" };
+
+  for (let page = 0; page < 15 && songs.length < limit; page++) {
+    try {
+      const apiUrl = `https://api.qishui.com/luna/pc/playlist/detail?playlist_id=${encodeURIComponent(pid)}&cursor=${encodeURIComponent(cursor)}&cnt=60&aid=386088&device_platform=web&channel=pc_web`;
+      const r = await fetchTimeout(apiUrl, { headers: hdrs }, 5500);
+      if (!r.ok) break;
+      const d = await r.json();
+      if (page === 0) {
+        title = d?.playlist?.title || d?.playlist?.name || title;
+        cover = d?.playlist?.url_cover?.urls?.[0] || d?.playlist?.cover?.urls?.[0] || "";
+        description = (d?.playlist?.desc || "").slice(0, 160);
+      }
+      const resList = d?.media_resources || [];
+      if (!resList.length) break;
+      for (const item of resList) {
+        const t = item?.entity?.track || item?.track || item;
+        const name = (t?.name || t?.title || "").trim();
+        if (!name) continue;
+        const artists = (t?.artists || []).map((a) => a?.name).filter(Boolean).join(" / ") || t?.artist?.name || "未知歌手";
+        const nk = makeNormKey(name, artists);
+        if (seen.has(nk)) continue;
+        seen.add(nk);
+        const rawDur = Number(t?.duration || 0);
+        songs.push({
+          id: 0,
+          norm_key: nk,
+          title: name,
+          artist: artists,
+          album: t?.album?.name || "",
+          cover: t?.album?.url_cover?.urls?.[0] || t?.cover?.urls?.[0] || cover,
+          duration: rawDur > 10000 ? Math.round(rawDur / 1000) : Math.round(rawDur),
+          category: "导入歌单",
+          ext_source: "qishui",
+          ext_id: String(t?.id || item?.id || nk),
+        });
+        if (songs.length >= limit) break;
+      }
+      if (!d?.has_more || !d?.next_cursor || String(d.next_cursor) === cursor) break;
+      cursor = String(d.next_cursor);
+    } catch { break; }
+  }
+
+  // 若 PC API 受限，降级抓取汽水分享页内嵌 _ROUTER_DATA
+  if (!songs.length) {
+    try {
+      const hr = await fetchTimeout(`https://music.douyin.com/qishui/share/playlist?playlist_id=${encodeURIComponent(pid)}`, { headers: { "User-Agent": UA } }, 6000);
+      const htmlText = await hr.text();
+      const m = htmlText.match(/_ROUTER_DATA\s*=\s*(\{[\s\S]*?\});\s*<\/script>/) || htmlText.match(/_ROUTER_DATA\s*=\s*(\{[\s\S]*?\});/);
+      if (m) {
+        const routerData = JSON.parse(m[1]);
+        const ld = routerData?.loaderData || {};
+        const pg = ld.playlist_page || ld[Object.keys(ld).find((k) => k.includes("playlist")) || ""] || {};
+        title = pg?.playlist?.title || pg?.playlistInfo?.title || title;
+        cover = pg?.playlist?.cover || pg?.playlistInfo?.cover || cover;
+        const list = pg?.trackList || pg?.tracks || pg?.media_resources || [];
+        for (const item of list) {
+          const t = item?.entity?.track || item?.track || item;
+          const name = (t?.name || t?.title || "").trim();
+          if (!name) continue;
+          const artists = (t?.artists || []).map((a) => a?.name).filter(Boolean).join(" / ") || t?.artist || "未知歌手";
+          const nk = makeNormKey(name, artists);
+          if (seen.has(nk)) continue;
+          seen.add(nk);
+          const rawDur = Number(t?.duration || 0);
+          songs.push({
+            id: 0, norm_key: nk, title: name, artist: artists, album: t?.album?.name || t?.album || "",
+            cover: t?.album?.url_cover?.urls?.[0] || t?.cover || cover,
+            duration: rawDur > 10000 ? Math.round(rawDur / 1000) : Math.round(rawDur),
+            category: "导入歌单", ext_source: "qishui", ext_id: String(t?.id || nk),
+          });
+        }
+      }
+    } catch {}
+  }
+
+  return songs.length ? { id: `qs_${pid}`, title, artist: "汽水音乐", cover, description, songs } : null;
+}
+
+async function fetchKuwoPlaylistDetail(pid, limit = 1000) {
+  try {
+    const r = await fetchTimeout(
+      `http://nplserver.kuwo.cn/pl.svc?op=getlistinfo&pid=${encodeURIComponent(pid)}&pn=0&rn=${limit}&encode=utf8&keyset=pl2012&identity=kuwo&pcmp4=1`,
+      { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, 6500
+    );
+    const data = await r.json();
+    const list = data?.musiclist || [];
+    if (!list.length) return null;
+    return {
+      id: `kw_${pid}`, title: data.title || "酷我歌单", artist: data.uname || "酷我音乐",
+      cover: data.pic || "", description: (data.info || "").slice(0, 160),
+      songs: list.slice(0, limit).map((m) => {
+        const artist = String(m.artist || "未知歌手").replace(/&/g, " / ");
+        const rid = String(m.id || "").replace(/^MUSIC_/, "");
+        return {
+          id: 0, norm_key: makeNormKey(m.name, artist), title: m.name || "", artist,
+          album: m.album || "", cover: data.pic || "", duration: Number(m.duration || 0),
+          category: "导入歌单", ext_source: "kuwo", ext_id: rid,
+        };
+      }),
+    };
+  } catch { return null; }
+}
+
+async function fetchKugouPlaylistDetail(sid, limit = 1000) {
+  try {
+    const [infoRes, p1Res] = await Promise.all([
+      fetchTimeout(`http://mobilecdn.kugou.com/api/v3/special/info?specialid=${encodeURIComponent(sid)}`, { headers: { "User-Agent": UA } }, 5000).then((r) => r.json()).catch(() => ({})),
+      fetchTimeout(`http://mobilecdn.kugou.com/api/v3/special/song?specialid=${encodeURIComponent(sid)}&page=1&pagesize=300&format=json`, { headers: { "User-Agent": UA } }, 6500).then((r) => r.json()),
+    ]);
+    const info = infoRes?.data || {};
+    let items = p1Res?.data?.info || [];
+    const total = Math.min(Number(p1Res?.data?.total || items.length), limit);
+    const pageCalls = [];
+    for (let p = 2; p <= Math.ceil(total / 300) && p <= 4; p++) {
+      pageCalls.push(
+        fetchTimeout(`http://mobilecdn.kugou.com/api/v3/special/song?specialid=${encodeURIComponent(sid)}&page=${p}&pagesize=300&format=json`, { headers: { "User-Agent": UA } }, 6500)
+          .then((r) => r.json())
+          .then((d) => d?.data?.info || [])
+          .catch(() => [])
+      );
+    }
+    if (pageCalls.length) {
+      for (const extra of await Promise.all(pageCalls)) items = items.concat(extra);
+    }
+    if (!items.length) return null;
+    const cover = (info.imgurl || "").replace("{size}", "400");
+    return {
+      id: `kg_${sid}`, title: info.specialname || "酷狗歌单", artist: info.nickname || "酷狗音乐",
+      cover, description: (info.intro || "").slice(0, 160),
+      songs: items.slice(0, limit).map((s) => {
+        let title = s.songname || "", artist = s.singername || "";
+        if (!title && s.filename) {
+          const idx = s.filename.indexOf(" - ");
+          if (idx > 0) { artist = s.filename.slice(0, idx).trim(); title = s.filename.slice(idx + 3).trim(); }
+          else title = s.filename;
+        }
+        return {
+          id: 0, norm_key: makeNormKey(title, artist), title: title || "未知歌曲", artist: artist || "未知歌手",
+          album: s.remark || "", cover, duration: Number(s.duration || 0),
+          category: "导入歌单", ext_source: "kugou", ext_id: String(s.hash || s.audio_id || makeNormKey(title, artist)),
+        };
+      }),
+    };
+  } catch { return null; }
+}
+
 async function importExternalPlaylist(urlLike, env) {
   let raw = String(urlLike || "").trim();
   if (!raw) return null;
+
+  // 若输入包含分享文案（如汽水/网易云自带文字），提取其中的 URL
+  const urlInText = raw.match(/https?:\/\/[^\s]+/i);
+  if (urlInText) raw = urlInText[0];
 
   const mhMatch = raw.match(/(?:share=|\/share\/)([a-zA-Z0-9_-]{4,24})/);
   if (mhMatch) {
@@ -384,21 +548,39 @@ async function importExternalPlaylist(urlLike, env) {
     if (row) return { title: row.title, description: row.description || "Music Hub 分享歌单", cover: "", songs: JSON.parse(row.songs_json || "[]") };
   }
 
-  if (/^https?:\/\/(163cn\.tv|c6\.y\.qq\.com|t\.cn)/i.test(raw)) {
+  if (/^https?:\/\/(163cn\.tv|c6\.y\.qq\.com|t\.cn|qishui\.douyin\.com|v\.douyin\.com)/i.test(raw)) {
+    if (!isSafeExternalUrl(raw)) return null;
     try {
-      const rr = await fetchTimeout(raw, { method: "GET", headers: { "User-Agent": UA }, redirect: "follow" }, 4500);
+      const rr = await fetchTimeout(raw, { method: "GET", headers: { "User-Agent": UA }, redirect: "follow" }, 5000);
       try { await rr.body?.cancel(); } catch {}
-      if (rr.url) raw = rr.url;
+      if (rr.url && isSafeExternalUrl(rr.url)) raw = rr.url;
     } catch {}
   }
 
+  // 1. 汽水音乐
+  if (raw.includes("qishui") || raw.includes("douyin.com")) {
+    const qsm = raw.match(/playlist_id=(\d+)/) || raw.match(/playlist\/(\d+)/);
+    if (qsm) return await fetchQishuiPlaylistDetail(qsm[1], 1000);
+  }
+  // 2. 酷狗音乐
+  if (raw.includes("kugou.com")) {
+    const kgm = raw.match(/special\/single\/(\d+)/) || raw.match(/songlist\/(\d+)/) || raw.match(/specialid=(\d+)/);
+    if (kgm) return await fetchKugouPlaylistDetail(kgm[1], 1000);
+  }
+  // 3. 酷我音乐
+  if (raw.includes("kuwo.cn")) {
+    const kwm = raw.match(/playlist_detail\/(\d+)/) || raw.match(/[?&]pid=(\d+)/);
+    if (kwm) return await fetchKuwoPlaylistDetail(kwm[1], 1000);
+  }
+  // 4. QQ音乐
   if (raw.includes("y.qq.com") || raw.includes("qq.com")) {
     const qm = raw.match(/playlist\/(\d+)/) || raw.match(/[?&]id=(\d+)/) || raw.match(/disstid=(\d+)/);
-    if (qm) return await fetchQQPlaylistDetail(qm[1]);
+    if (qm) return await fetchQQPlaylistDetail(qm[1], 1000);
   }
-
+  // 5. 网易云音乐（链接或纯数字 ID）
   const nm = raw.match(/(?:playlist\/|[?&]id=)(\d{5,15})/) || raw.match(/^(\d{5,15})$/);
-  if (nm) return await fetchNeteasePlaylistDetail(nm[1]);
+  if (nm) return await fetchNeteasePlaylistDetail(nm[1], 1000);
+
   return null;
 }
 
@@ -911,7 +1093,7 @@ export default {
           const body = await request.json(), m = String(body.url || "").match(/(?:id=|playlist\/)(\d+)/) || String(body.url || "").trim().match(/^(\d{5,15})$/);
           if (!m) return json({ error: "无法识别网易云歌单 ID" }, 400);
           const pid = m[1], songCat = String(body.songCategory || "经典").trim(), chartCat = String(body.chartCategory || "经典金曲").trim();
-          const detail = await fetchNeteasePlaylistDetail(pid, 100);
+          const detail = await fetchNeteasePlaylistDetail(pid, 300);
           if (!detail?.songs?.length) return json({ error: "歌单抓取为空" }, 400);
           const now = Math.floor(Date.now() / 1000), tracks = detail.songs, normKeys = [], stmts = [];
           for (let i = 0; i < tracks.length; i++) {
@@ -1135,7 +1317,7 @@ export default {
         if (!rawId) return json({ error: "missing id" }, 400);
         const nid = rawId.replace(/^ne_/, "");
         return withEdgeCache(ctx, `/sheet/${encodeURIComponent(nid)}`, 900, async (ttl) => {
-          const detail = await fetchNeteasePlaylistDetail(nid, 150);
+          const detail = await fetchNeteasePlaylistDetail(nid, 300);
           if (!detail) return json({ error: "sheet not found" }, 404);
           return json({ sheet: { id: detail.id, title: detail.title, artist: detail.artist, cover: detail.cover, description: detail.description }, songs: detail.songs }, 200, { "Cache-Control": `public, max-age=${ttl}` });
         });
@@ -1147,13 +1329,13 @@ export default {
           inputUrl = body.url || inputUrl;
         }
         const imported = await importExternalPlaylist(inputUrl, env);
-        if (!imported || !imported.songs?.length) return json({ error: "未能识别该歌单链接，支持网易云、QQ音乐公开歌单或 Music Hub 分享链接" }, 400);
+        if (!imported || !imported.songs?.length) return json({ error: "未能识别该歌单，支持网易云、QQ音乐、汽水音乐、酷狗、酷我公开歌单或 Music Hub 分享链接" }, 400);
         return json(imported);
       }
       if (path === "/api/share" && request.method === "POST") {
         const body = await request.json().catch(() => ({}));
         const title = String(body.title || "我的歌单").trim().slice(0, 60);
-        const songs = Array.isArray(body.songs) ? body.songs.slice(0, 300) : [];
+        const songs = Array.isArray(body.songs) ? body.songs.slice(0, 1000) : [];
         if (!songs.length) return json({ error: "空歌单无法分享" }, 400);
         const slim = songs.map((s) => ({
           id: Number(s.id || 0), norm_key: s.norm_key || makeNormKey(s.title, s.artist),
@@ -1333,12 +1515,12 @@ function raceFirst(tasks) {
 module.exports = {
   platform: "MusicHub·自建云端",
   author: "MusicHub",
-  version: "2.1.0",
+  version: "2.2.0",
   cacheControl: "no-cache",
   supportedSearchType: ["music", "album", "artist", "sheet"],
   hints: {
     importMusicSheet: [
-      "支持导入网易云音乐、QQ音乐公开歌单链接",
+      "支持导入网易云、QQ音乐、汽水音乐、酷狗、酷我公开歌单（最高 1000 首）",
       "支持导入 Music Hub 网页播放器生成的歌单分享链接"
     ],
     importMusicItem: [
@@ -1403,7 +1585,7 @@ module.exports = {
   },
 
   async importMusicSheet(urlLike) {
-    const { data } = await axios.get(BASE + "/api/import-sheet", { params: { url: urlLike }, headers: H, timeout: 15000 });
+    const { data } = await axios.get(BASE + "/api/import-sheet", { params: { url: urlLike }, headers: H, timeout: 25000 });
     return (data.songs || []).map(mapSong);
   },
 
@@ -1518,7 +1700,7 @@ module.exports = {
         const lxCode = `/*!
  * @name MusicHub·自建云端
  * @description 基于 Music Hub Worker 的洛雪音乐自定义源（多源并发 + 防30秒试听）
- * @version 2.1.0
+ * @version 2.2.0
  * @author MusicHub
  */
 const { EVENT_NAMES, request, on, send } = globalThis.lx;
@@ -1576,7 +1758,7 @@ send(EVENT_NAMES.inited, {
         const tkSeg = encodeURIComponent(env.ACCESS_TOKEN || "public");
         return json({
           plugins: [
-            { name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/s/${tkSeg}/music-hub.js`, version: "2.1.0" },
+            { name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/s/${tkSeg}/music-hub.js`, version: "2.2.0" },
           ],
         });
       }
