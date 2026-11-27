@@ -101,6 +101,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   .aud-bar{position:fixed;left:0;right:0;bottom:0;background:var(--aud-bg);border-top:1px solid var(--line);padding:10px 20px;display:none;align-items:center;gap:12px;z-index:40;box-shadow:0 -8px 24px rgba(0,0,0,.15);}
   .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-10px);background:var(--card);color:var(--text);border:1px solid var(--line);padding:9px 16px;border-radius:999px;font-size:12.5px;font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.22);z-index:90;opacity:0;pointer-events:none;transition:.2s;}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+  .cfg-lbl{font-size:12px;color:var(--muted);margin-right:4px;}
 </style>
 </head>
 <body>
@@ -221,8 +222,8 @@ function renderSubsTab() {
   var tkSeg = encodeURIComponent(tk || "public");
   var items = [
     { id: "sub_player", title: "📱 PWA 手机 / 网页播放器", desc: "支持电台漫游、记忆目录下载、自建歌单与深浅双主题", url: base + "/player" + qs },
-    { id: "sub_mfjson", title: "🧩 MusicFree / 音悦 通用订阅源 (.json)", desc: "严格 .json 结尾，兼容 MusicFree 与音悦 App 网络导入", url: base + "/s/" + tkSeg + "/musicfree.json" },
-    { id: "sub_mfjs", title: "📄 MusicFree / 音悦 单插件直链 (.js)", desc: "适合直接导入单个插件脚本（支持推荐歌单/搜歌手/导入歌单）", url: base + "/s/" + tkSeg + "/music-hub.js" },
+    { id: "sub_mfjson", title: "🧩 MusicFree / 音悦 通用订阅源 (.json)", desc: "严格 .json 结尾；支持搜歌手/推荐歌单，及网易/QQ/汽水/酷狗/酷我歌单导入（最高1000首）", url: base + "/s/" + tkSeg + "/musicfree.json" },
+    { id: "sub_mfjs", title: "📄 MusicFree / 音悦 单插件直链 (.js)", desc: "适合直接导入单个插件脚本", url: base + "/s/" + tkSeg + "/music-hub.js" },
     { id: "sub_lxjs", title: "❄️ 洛雪音乐 (LX Music) 自定义源 (.js)", desc: "导入到洛雪桌面版/安卓版「设置 -> 自定义源」", url: base + "/s/" + tkSeg + "/lx-source.js" },
     { id: "sub_diag", title: "🩺 全源并发体检接口", desc: "实时查看服务器到各大音源的真实播放解析连通率与耗时", url: base + "/api/diag" + qs },
   ];
@@ -248,6 +249,9 @@ function renderSubsTab() {
 
 function renderOverview() {
   var st = dashData.stats || {}, pct = st.songs ? Math.round((st.lyrics / st.songs) * 100) : 0;
+  var sc = dashData.syncConfig || { enabled: true, lrcLimit: 450, chartMax: 120, lastSyncAt: 0, lastSyncSummary: "暂无同步记录" };
+  var lastTimeStr = sc.lastSyncAt ? new Date(sc.lastSyncAt * 1000).toLocaleString("zh-CN") : "尚未运行";
+
   var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><h3>曲库概览</h3><button class="sm green" onclick="switchTab(\\'subs\\')">查看多端订阅源 & 二维码</button></div>' +
     '<div class="grid"><div class="stat"><b>' + (st.songs||0) + '</b><span>可用歌曲</span></div><div class="stat"><b>' + (st.charts||0) + '</b><span>精选榜单</span></div><div class="stat"><b>' + (st.lyrics||0) + ' (' + pct + '%)</b><span>歌词覆盖率</span></div><div class="stat"><b>' + (st.blocked||0) + '</b><span>已屏蔽</span></div></div><div style="margin-top:14px;">' + (dashData.categories || []).map(function(c) { return '<span class="badge">' + esc(c.category) + ': ' + c.c + '首</span>'; }).join("") + '</div></div>';
 
@@ -258,7 +262,17 @@ function renderOverview() {
     h += '<tr><td>' + esc(s.id) + '</td><td><b>' + esc(s.name) + '</b><br><small style="color:var(--muted);">' + esc(s.endpoint) + '</small></td><td>' + esc(s.type) + '</td><td>' + s.priority + '</td><td>' + (s.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge">停用</span>') + '</td><td id="st-' + esc(s.id) + '"><small style="color:var(--muted);">未测</small></td><td style="white-space:nowrap;"><button class="sm" onclick="testSrc(' + i + ')">测活</button> <button class="sm ghost" onclick="editSrcForm(' + i + ')">改</button> <button class="sm ghost" onclick="toggleSrc(' + i + ')">' + (s.enabled ? "停" : "启") + '</button> <button class="sm red" onclick="delSrc(' + i + ')">删</button></td></tr>';
   }
   h += '</tbody></table></div><div class="row" style="margin-top:12px;"><input id="sid" placeholder="ID 如 myapi" style="width:95px;" /><input id="sname" placeholder="名称" style="width:120px;" /><select id="stype"><option value="agg">agg</option><option value="vkeys">vkeys</option><option value="native">native</option><option value="bili">bili</option></select><input id="send" placeholder="Endpoint URL" style="flex:1;min-width:180px;" /><input id="spri" type="number" value="20" style="width:65px;" /><button onclick="addSrc()">保存音源</button></div></div>';
-  h += '<div class="card"><h3>垃圾翻唱 / 伴奏自动过滤词配置</h3><div class="row"><input id="junkIn" value="' + esc(dashData.junkWords || "") + '" style="flex:1;" /><button onclick="saveJunk()">保存过滤词</button></div></div>';
+
+  h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;"><h3>每日自动同步策略（sync.py）</h3><span class="badge">' + esc(lastTimeStr) + ' · ' + esc(sc.lastSyncSummary) + '</span></div>' +
+    '<div class="row">' +
+    '<span class="cfg-lbl">自动同步:</span><select id="syncEn"><option value="1"' + (sc.enabled ? ' selected' : '') + '>启用每日同步</option><option value="0"' + (!sc.enabled ? ' selected' : '') + '>暂停同步</option></select>' +
+    '<span class="cfg-lbl">每次抓词上限:</span><input id="syncLrcIn" type="number" min="0" max="2000" value="' + esc(sc.lrcLimit) + '" style="width:95px;" title="设为0表示本次只同步榜单不抓歌词" />' +
+    '<span class="cfg-lbl">单榜最多曲目:</span><input id="syncChartIn" type="number" min="10" max="500" value="' + esc(sc.chartMax) + '" style="width:95px;" />' +
+    '<button onclick="saveSyncCfg()">保存同步参数</button>' +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--muted);">提示：调整后会写入 D1，下次定时任务或手动触发 GitHub Actions 时自动生效（已内置 45 天空提交保活，不会因仓库不更新而停摆）。</div></div>';
+
+  h += '<div class="card"><h3>垃圾翻唱 / 伴奏自动过滤词配置（同时作用于播放器与 sync.py）</h3><div class="row"><input id="junkIn" value="' + esc(dashData.junkWords || "") + '" style="flex:1;" /><button onclick="saveJunk()">保存过滤词</button></div></div>';
   document.getElementById("main").innerHTML = h;
 }
 function testSrc(i) {
@@ -273,6 +287,15 @@ function editSrcForm(i) { var s = dashData.sources[i]; document.getElementById("
 function toggleSrc(i) { var s = dashData.sources[i]; req("/api/admin/source", { method: "POST", body: JSON.stringify({ id:s.id, name:s.name, type:s.type, endpoint:s.endpoint, priority:s.priority, enabled:s.enabled?0:1 }) }).then(function(){ toast("状态已切换"); loadAll(); }); }
 function delSrc(i) { var s = dashData.sources[i]; if (confirm("删除音源 " + s.name + "？")) req("/api/admin/source/delete", { method: "POST", body: JSON.stringify({ id: s.id }) }).then(loadAll); }
 function addSrc() { req("/api/admin/source", { method: "POST", body: JSON.stringify({ id: document.getElementById("sid").value, name: document.getElementById("sname").value, type: document.getElementById("stype").value, endpoint: document.getElementById("send").value, priority: Number(document.getElementById("spri").value), enabled: 1 }) }).then(function(){ toast("音源已保存"); loadAll(); }); }
+function saveSyncCfg() {
+  var en = document.getElementById("syncEn").value === "1";
+  var lrc = Math.max(0, Number(document.getElementById("syncLrcIn").value || 0));
+  var cmax = Math.max(10, Number(document.getElementById("syncChartIn").value || 120));
+  req("/api/admin/settings", { method: "POST", body: JSON.stringify({ syncEnabled: en, syncLrcLimit: lrc, syncChartMax: cmax }) }).then(function() {
+    dashData.syncConfig = Object.assign(dashData.syncConfig || {}, { enabled: en, lrcLimit: lrc, chartMax: cmax });
+    toast("同步参数已保存，下次 sync.py 运行生效");
+  });
+}
 function saveJunk() { req("/api/admin/settings", { method: "POST", body: JSON.stringify({ junkWords: document.getElementById("junkIn").value }) }).then(function(){ toast("过滤词已保存"); }); }
 
 function renderSongsTab() {
