@@ -3,18 +3,24 @@ const axios = require("axios");
 
 const API = "https://monster-siren.hypergryph.com/api";
 let songsCache = null;
+let songsCacheTs = 0;
 
 async function fetchAllSongs() {
-  if (songsCache) return songsCache;
+  const now = Date.now();
+  if (songsCache && songsCache.length && now - songsCacheTs < 1800 * 1000) return songsCache;
   const { data } = await axios.get(`${API}/songs`, { timeout: 8000 });
-  songsCache = data?.data?.list || [];
-  return songsCache;
+  const list = data?.data?.list || [];
+  if (list.length) {
+    songsCache = list;
+    songsCacheTs = now;
+  }
+  return list;
 }
 
 module.exports = {
   platform: "MusicHub·塞壬唱片",
   author: "MusicHub",
-  version: "1.0.0",
+  version: "1.0.1",
   cacheControl: "no-cache",
   supportedSearchType: ["music", "album"],
 
@@ -36,10 +42,7 @@ module.exports = {
 
     const all = await fetchAllSongs();
     const matched = all.filter(
-      (s) =>
-        !q ||
-        s.name.toLowerCase().includes(q) ||
-        (s.artists || []).join(",").toLowerCase().includes(q)
+      (s) => !q || s.name.toLowerCase().includes(q) || (s.artists || []).join(",").toLowerCase().includes(q)
     );
     const slice = matched.slice((page - 1) * 20, page * 20);
     return {
@@ -54,21 +57,16 @@ module.exports = {
   },
 
   async getAlbumInfo(albumItem) {
-    const { data } = await axios.get(`${API}/album/${albumItem.id}/detail`, {
-      timeout: 8000,
-    });
+    const { data } = await axios.get(`${API}/album/${albumItem.id}/detail`, { timeout: 8000 });
     const d = data?.data || {};
+    const fallbackArtists = (d.artistes || []).join(" / ") || "塞壬唱片-MSR";
     return {
       isEnd: true,
-      albumItem: {
-        ...albumItem,
-        artwork: d.coverUrl,
-        description: d.intro,
-      },
+      albumItem: { ...albumItem, artwork: d.coverUrl, description: d.intro },
       musicList: (d.songs || []).map((s) => ({
         id: s.cid,
         title: s.name,
-        artist: (s.artistes || []).join(" / ") || "塞壬唱片-MSR",
+        artist: (s.artistes && s.artistes.length ? s.artistes.join(" / ") : fallbackArtists),
         album: d.name,
         artwork: d.coverUrl,
       })),
