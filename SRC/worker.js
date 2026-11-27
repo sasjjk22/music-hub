@@ -151,7 +151,7 @@ function html(body, status = 200, extraHeaders = {}) {
 }
 async function withEdgeCache(ctx, keyPath, ttlSec, fn) {
   const cache = caches.default;
-  const cacheKey = new Request("https://cache.internal/v5" + keyPath);
+  const cacheKey = new Request("https://cache.internal/v6" + keyPath);
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
   const resp = await fn(ttlSec);
@@ -159,14 +159,15 @@ async function withEdgeCache(ctx, keyPath, ttlSec, fn) {
   return resp;
 }
 async function purgeHomeCache(ctx) {
-  ctx.waitUntil(caches.default.delete(new Request("https://cache.internal/v5/home")));
+  ctx.waitUntil(caches.default.delete(new Request("https://cache.internal/v6/home")));
 }
 
-function getTokenFromReq(request) {
+function getTokenFromReq(request, pathToken = "") {
+  if (pathToken) return pathToken;
   const url = new URL(request.url);
   return url.searchParams.get("token") || request.headers.get("X-Access-Token") || (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
 }
-function checkToken(request, env) { return !env.ACCESS_TOKEN || getTokenFromReq(request) === String(env.ACCESS_TOKEN).trim(); }
+function checkToken(request, env, pathToken = "") { return !env.ACCESS_TOKEN || getTokenFromReq(request, pathToken) === String(env.ACCESS_TOKEN).trim(); }
 async function digestHex(algo, text) {
   const digest = await crypto.subtle.digest(algo, new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -309,13 +310,38 @@ async function fetchNeteasePlaylistDetail(pid, limit = 150) {
     `https://music.163.com/api/playlist/detail?id=${pid}`,
   ]) {
     try {
-      const d = await (await fetchTimeout(ep, { headers: NE_HEADERS }, 5500)).json();
+      const d = await (await fetchTimeout(ep, { headers: NE_HEADERS }, 6000)).json();
       const pl = d?.playlist || d?.result;
-      if (pl?.tracks?.length) {
+      if (!pl) continue;
+      let rawTracks = Array.isArray(pl.tracks) ? pl.tracks.slice() : [];
+      const allIds = Array.isArray(pl.trackIds) ? pl.trackIds.map((x) => x.id).filter(Boolean) : [];
+
+      // 若网易云只返回了部分 tracks，利用 trackIds 批量调 v3/song/detail 补全其余曲目
+      if (allIds.length > rawTracks.length && rawTracks.length < limit) {
+        const haveIds = new Set(rawTracks.map((t) => String(t.id)));
+        const missingIds = allIds.slice(0, limit).filter((tid) => !haveIds.has(String(tid)));
+        if (missingIds.length) {
+          const batches = [];
+          for (let i = 0; i < missingIds.length; i += 80) {
+            const chunk = missingIds.slice(i, i + 80);
+            const cParam = encodeURIComponent(JSON.stringify(chunk.map((tid) => ({ id: tid }))));
+            batches.push(
+              fetchTimeout(`https://music.163.com/api/v3/song/detail?c=${cParam}`, { headers: NE_HEADERS }, 5500)
+                .then((r) => r.json())
+                .then((sd) => sd?.songs || [])
+                .catch(() => [])
+            );
+          }
+          const extraLists = await Promise.all(batches);
+          for (const lst of extraLists) rawTracks = rawTracks.concat(lst);
+        }
+      }
+
+      if (rawTracks.length) {
         return {
           id: `ne_${pid}`, title: pl.name || "网易云歌单", artist: pl.creator?.nickname || "网易云音乐",
           cover: httpsCover(pl.coverImgUrl || ""), description: (pl.description || "").slice(0, 160),
-          songs: pl.tracks.slice(0, limit).map(mapNeteaseSong),
+          songs: rawTracks.slice(0, limit).map(mapNeteaseSong),
         };
       }
     } catch {}
@@ -408,7 +434,7 @@ async function fetchNeteaseSimiSheets(songId) {
 
 async function getSceneRadioPool(mode, env, ctx, junkList) {
   const cache = caches.default;
-  const cacheKey = new Request(`https://cache.internal/v5/radio_pool/${mode}`);
+  const cacheKey = new Request(`https://cache.internal/v6/radio_pool/${mode}`);
   const hit = await cache.match(cacheKey);
   if (hit) {
     const data = await hit.json().catch(() => null);
@@ -419,7 +445,7 @@ async function getSceneRadioPool(mode, env, ctx, junkList) {
   const seen = new Set();
   const pushItem = (s) => {
     if (!s || !s.title || isJunkTitle(s.title, "", junkList)) return;
-    if (s.duration && s.duration > 720) return; // 过滤超过12分钟的长播客/电台串烧
+    if (s.duration && s.duration > 720) return;
     const nk = s.norm_key || makeNormKey(s.title, s.artist);
     if (!nk || seen.has(nk)) return;
     seen.add(nk);
@@ -520,12 +546,7 @@ async function handleRadioRequest(payload, env, ctx) {
     }
   }
 
-  return {
-    mode: "personal",
-    station: RADIO_STATIONS[0],
-    songs: shuffleArr(pool).slice(0, 20),
-    sheets,
-  };
+  return { mode: "personal", station: RADIO_STATIONS[0], songs: shuffleArr(pool).slice(0, 20), sheets };
 }
 
 async function fetchOfficialArtistData(name, artistId = "", junkList = DEFAULT_JUNK_WORDS) {
@@ -783,7 +804,14 @@ export default {
   async fetch(request, env, ctx) {
     try {
       if (request.method === "OPTIONS") return json({ ok: true });
-      const url = new URL(request.url), path = url.pathname;
+      const url = new URL(request.url);
+      let path = url.pathname, pathToken = "";
+      const shareRoute = path.match(/^\/s\/([^/]+)\/(musicfree\.json|music-hub\.js|lx-source\.js)$/);
+      if (shareRoute) {
+        pathToken = decodeURIComponent(shareRoute[1]);
+        path = "/" + shareRoute[2];
+      }
+
       if (path === "/" || path === "/player") return html(PLAYER_HTML, 200, { "Cache-Control": "public, max-age=180" });
       if (path === "/admin") return html(ADMIN_HTML, 200, { "Cache-Control": "public, max-age=180" });
       if (path === "/health") return json({ name: "Music Hub API", status: "ok", time: Date.now() });
@@ -870,18 +898,13 @@ export default {
           const body = await request.json(), m = String(body.url || "").match(/(?:id=|playlist\/)(\d+)/) || String(body.url || "").trim().match(/^(\d{5,15})$/);
           if (!m) return json({ error: "无法识别网易云歌单 ID" }, 400);
           const pid = m[1], songCat = String(body.songCategory || "经典").trim(), chartCat = String(body.chartCategory || "经典金曲").trim();
-          let pl = null;
-          for (const ep of [`https://music.163.com/api/v6/playlist/detail?id=${pid}&n=100`, `https://music.163.com/api/playlist/detail?id=${pid}`]) {
-            try { const d = await (await fetchTimeout(ep, { headers: NE_HEADERS }, 7000)).json(); pl = d?.playlist || d?.result; if (pl?.tracks?.length) break; } catch {}
-          }
-          if (!pl?.tracks?.length) return json({ error: "歌单抓取为空" }, 400);
-          const now = Math.floor(Date.now() / 1000), tracks = pl.tracks.slice(0, 100), normKeys = [], stmts = [];
+          const detail = await fetchNeteasePlaylistDetail(pid, 100);
+          if (!detail?.songs?.length) return json({ error: "歌单抓取为空" }, 400);
+          const now = Math.floor(Date.now() / 1000), tracks = detail.songs, normKeys = [], stmts = [];
           for (let i = 0; i < tracks.length; i++) {
-            const t = tracks[i], title = (t.name || "").trim(); if (!title) continue;
-            const artists = (t.ar || t.artists || []).map((a) => a.name).filter(Boolean).join(" / ") || "未知歌手";
-            const nk = makeNormKey(title, artists), alb = t.al || t.album || {}, score = Math.max(100, 900 - i * 4);
-            normKeys.push(nk);
-            stmts.push(env.DB.prepare(`INSERT INTO songs (norm_key,title,artist,album,cover,duration,category,tags,score,source_ids_json,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(norm_key) DO UPDATE SET score=MAX(songs.score,excluded.score),updated_at=excluded.updated_at`).bind(nk, title, artists, alb.name || "", httpsCover(alb.picUrl || ""), Math.round((t.dt || t.duration || 0) / 1000), songCat, "", score, JSON.stringify({ netease: String(t.id) }), now));
+            const t = tracks[i], score = Math.max(100, 900 - i * 4);
+            normKeys.push(t.norm_key);
+            stmts.push(env.DB.prepare(`INSERT INTO songs (norm_key,title,artist,album,cover,duration,category,tags,score,source_ids_json,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(norm_key) DO UPDATE SET score=MAX(songs.score,excluded.score),updated_at=excluded.updated_at`).bind(t.norm_key, t.title, t.artist, t.album, t.cover, t.duration, songCat, "", score, JSON.stringify({ netease: String(t.ext_id) }), now));
           }
           for (let i = 0; i < stmts.length; i += 40) await env.DB.batch(stmts.slice(i, i + 40));
           const songIds = [];
@@ -891,10 +914,10 @@ export default {
             const map = new Map((results || []).map((r) => [r.norm_key, r.id]));
             for (const nk of chunk) if (map.has(nk)) songIds.push(map.get(nk));
           }
-          const chartTitle = String(body.chartTitle || pl.name || "导入歌单").trim();
-          await env.DB.prepare(`INSERT INTO charts (id,title,category,cover,description,song_ids_json,sort_order,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,category=excluded.category,cover=excluded.cover,song_ids_json=excluded.song_ids_json,updated_at=excluded.updated_at`).bind(`ne_${pid}`, chartTitle, chartCat, httpsCover(pl.coverImgUrl || ""), (pl.description || "").slice(0, 120), JSON.stringify(songIds), 45, now).run();
+          const chartTitle = String(body.chartTitle || detail.title || "导入歌单").trim();
+          await env.DB.prepare(`INSERT INTO charts (id,title,category,cover,description,song_ids_json,sort_order,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,category=excluded.category,cover=excluded.cover,song_ids_json=excluded.song_ids_json,updated_at=excluded.updated_at`).bind(`ne_${pid}`, chartTitle, chartCat, detail.cover, detail.description.slice(0, 120), JSON.stringify(songIds), 45, now).run();
           await purgeHomeCache(ctx);
-          ctx.waitUntil(caches.default.delete(new Request(`https://cache.internal/v5/chart/${encodeURIComponent(`ne_${pid}`)}`)));
+          ctx.waitUntil(caches.default.delete(new Request(`https://cache.internal/v6/chart/${encodeURIComponent(`ne_${pid}`)}`)));
           return json({ ok: true, title: chartTitle, importedCount: songIds.length });
         }
         if (path === "/api/admin/chart/update" && request.method === "POST") {
@@ -938,7 +961,7 @@ export default {
       }
 
       if (path === "/api/stream") {
-        if (!(checkToken(request, env) || (await checkAdmin(request, env)))) return json({ error: "Unauthorized" }, 401);
+        if (!(checkToken(request, env, pathToken) || (await checkAdmin(request, env)))) return json({ error: "Unauthorized" }, 401);
         let target = url.searchParams.get("u") || "", src = url.searchParams.get("src") || "";
         const isDl = url.searchParams.get("dl") === "1";
         let fn = (url.searchParams.get("fn") || "music").replace(/[/\\?%*:|"<>]/g, "_").slice(0, 120);
@@ -974,7 +997,7 @@ export default {
         return new Response(upstream.body, { status: upstream.status, headers: outHeaders });
       }
 
-      if (!checkToken(request, env)) return json({ error: "Unauthorized" }, 401);
+      if (!checkToken(request, env, pathToken)) return json({ error: "Unauthorized" }, 401);
 
       if (path === "/api/diag") {
         const song = { title: "一路上有你", artist: "张学友", duration: 297, source_ids_json: '{"netease":"190449"}' };
@@ -1168,7 +1191,8 @@ export default {
         });
       }
       if (path === "/api/song") {
-        const id = Number(url.searchParams.get("id") || 0);
+        const rawId = url.searchParams.get("id") || "";
+        const id = /^\d+$/.test(rawId) ? Number(rawId) : 0;
         if (id > 0) {
           const song = await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first();
           if (song) {
@@ -1184,7 +1208,8 @@ export default {
         return json({ song: { id: 0, lyric_lrc: live.lrc, lyric_trans: live.trans } });
       }
       if (path === "/api/play") {
-        let id = Number(url.searchParams.get("id") || 0);
+        const rawId = url.searchParams.get("id") || "";
+        let id = /^\d+$/.test(rawId) ? Number(rawId) : 0;
         const quality = url.searchParams.get("q") || "high", prefer = url.searchParams.get("prefer") || "", skip = url.searchParams.get("skip") || "", force = url.searchParams.get("force") === "1";
         let song = id > 0 ? await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first() : null;
         if (!song && id === 0) {
@@ -1201,7 +1226,7 @@ export default {
         }
         if (!song) return json({ error: "not found" }, 404);
 
-        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v5/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
+        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v6/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
         let resolved = null;
         if (!force) {
           const cached = await cache.match(cacheKey);
@@ -1218,12 +1243,12 @@ export default {
         }
 
         const needProxy = Boolean(resolved.needProxy || resolved.url.startsWith("http://"));
-        const token = getTokenFromReq(request);
+        const token = getTokenFromReq(request, pathToken);
         const proxyUrl = `${url.origin}/api/stream?u=${encodeURIComponent(resolved.url)}&src=${encodeURIComponent(resolved.source || "")}&token=${encodeURIComponent(token || "")}`;
         return json({ ...resolved, needProxy, songId: id, proxyUrl }, 200, { "Cache-Control": "private, no-store" });
       }
 
-      if (path === "/api/mf-plugin.js") {
+      if (path === "/api/mf-plugin.js" || path === "/music-hub.js") {
         const base = `${url.protocol}//${url.host}`;
         const pluginCode = `"use strict";
 const axios = require("axios");
@@ -1242,8 +1267,11 @@ function isJunk(name, origTitle) {
   return JUNK.some(function(w) { return n.indexOf(w) >= 0 && o.indexOf(w) < 0; });
 }
 function mapSong(s) {
+  var uid = (s.id && Number(s.id) > 0)
+    ? String(s.id)
+    : (s.ext_source && s.ext_id ? (s.ext_source + "_" + s.ext_id) : (s.norm_key || (s.title + "_" + s.artist)));
   return {
-    id: String(s.id || 0), title: s.title, artist: s.artist, album: s.album,
+    id: uid, title: s.title, artist: s.artist, album: s.album,
     artwork: s.cover, duration: s.duration, category: s.category || "",
     ext_source: s.ext_source || "", ext_id: s.ext_id || ""
   };
@@ -1269,7 +1297,7 @@ function raceFirst(tasks) {
 module.exports = {
   platform: "MusicHub·自建云端",
   author: "MusicHub",
-  version: "2.0.0",
+  version: "2.1.0",
   cacheControl: "no-cache",
   supportedSearchType: ["music", "album", "artist", "sheet"],
   hints: {
@@ -1339,7 +1367,7 @@ module.exports = {
   },
 
   async importMusicSheet(urlLike) {
-    const { data } = await axios.post(BASE + "/api/import-sheet", { url: urlLike }, { headers: H, timeout: 12000 });
+    const { data } = await axios.get(BASE + "/api/import-sheet", { params: { url: urlLike }, headers: H, timeout: 15000 });
     return (data.songs || []).map(mapSong);
   },
 
@@ -1448,9 +1476,73 @@ module.exports = {
 };`;
         return new Response(pluginCode, { headers: { "Content-Type": "application/javascript; charset=utf-8" } });
       }
+
+      if (path === "/api/lx-source.js" || path === "/lx-source.js") {
+        const base = `${url.protocol}//${url.host}`;
+        const lxCode = `/*!
+ * @name MusicHub·自建云端
+ * @description 基于 Music Hub Worker 的洛雪音乐自定义源（多源并发 + 防30秒试听）
+ * @version 2.1.0
+ * @author MusicHub
+ */
+const { EVENT_NAMES, request, on, send } = globalThis.lx;
+const BASE = ${JSON.stringify(base)};
+const TOKEN = ${JSON.stringify(env.ACCESS_TOKEN || "")};
+
+function toSec(iv) {
+  if (!iv) return 0;
+  if (typeof iv === "number") return Math.round(iv > 10000 ? iv / 1000 : iv);
+  var p = String(iv).split(":").map(Number);
+  if (p.length === 2) return p[0] * 60 + p[1];
+  if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  return 0;
+}
+
+on(EVENT_NAMES.request, ({ source, action, info }) => {
+  if (action !== "musicUrl") return Promise.reject(new Error("unsupported action"));
+  var mi = info.musicInfo || {};
+  var q = (info.type === "flac" || info.type === "flac24bit") ? "super" : (info.type === "128k" ? "low" : "high");
+  var extSrc = source === "wy" ? "netease" : (source === "kw" ? "kuwo" : (source === "tx" ? "qq" : ""));
+  var extId = String(mi.songmid || mi.id || "");
+  var dur = toSec(mi.interval);
+  var qs = "?id=0&q=" + encodeURIComponent(q)
+    + "&ext_source=" + encodeURIComponent(extSrc)
+    + "&ext_id=" + encodeURIComponent(extId)
+    + "&title=" + encodeURIComponent(mi.name || "")
+    + "&artist=" + encodeURIComponent(mi.singer || "")
+    + "&album=" + encodeURIComponent(mi.albumName || "")
+    + "&duration=" + dur
+    + (TOKEN ? "&token=" + encodeURIComponent(TOKEN) : "");
+
+  return new Promise((resolve, reject) => {
+    request(BASE + "/api/play" + qs, { method: "GET", timeout: 15000 }, (err, resp) => {
+      if (err) return reject(err);
+      var data = resp && resp.body;
+      if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) {} }
+      if (!data || data.error || !data.url) return reject(new Error((data && data.error) || "解析失败"));
+      resolve(data.needProxy && data.proxyUrl ? data.proxyUrl : data.url);
+    });
+  });
+});
+
+send(EVENT_NAMES.inited, {
+  openDevTools: false,
+  sources: {
+    wy: { name: "网易云", type: "music", actions: ["musicUrl"], qualitys: ["128k", "320k", "flac"] },
+    tx: { name: "QQ音乐", type: "music", actions: ["musicUrl"], qualitys: ["128k", "320k"] },
+    kw: { name: "酷我", type: "music", actions: ["musicUrl"], qualitys: ["128k", "320k"] }
+  }
+});`;
+        return new Response(lxCode, { headers: { "Content-Type": "application/javascript; charset=utf-8" } });
+      }
+
       if (path === "/musicfree.json") {
-        const qs = env.ACCESS_TOKEN ? `?token=${encodeURIComponent(env.ACCESS_TOKEN)}` : "";
-        return json({ plugins: [{ name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/api/mf-plugin.js${qs}`, version: "2.0.0" }] });
+        const tkSeg = encodeURIComponent(env.ACCESS_TOKEN || "public");
+        return json({
+          plugins: [
+            { name: "MusicHub·自建云端", url: `${url.protocol}//${url.host}/s/${tkSeg}/music-hub.js`, version: "2.1.0" },
+          ],
+        });
       }
       return json({ error: "Not Found" }, 404);
     } catch (err) {
