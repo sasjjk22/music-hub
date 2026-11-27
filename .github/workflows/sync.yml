@@ -5,11 +5,16 @@ on:
     - cron: "0 20 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -19,3 +24,16 @@ jobs:
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
         run: python3 sync.py
+      - name: Keep schedule active (prevent 60-day auto-disable)
+        if: always()
+        run: |
+          LAST_TS=$(git log -1 --format=%ct)
+          NOW_TS=$(date +%s)
+          DIFF_DAYS=$(( (NOW_TS - LAST_TS) / 86400 ))
+          echo "Days since last commit: $DIFF_DAYS"
+          if [ "$DIFF_DAYS" -ge 45 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keep scheduled workflow active"
+            git push
+          fi
