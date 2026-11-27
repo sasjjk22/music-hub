@@ -14,7 +14,7 @@ NE_HEADERS = {
     "Referer": "https://music.163.com/",
     "Cookie": "os=pc; appver=2.9.7",
 }
-JUNK_WORDS = ("dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版")
+DEFAULT_JUNK_WORDS = ("dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版")
 
 # 榜单配置: (playlist_id, 标题, 首页分类, 歌曲分类, 排序权重, 抓取数量)
 NETEASE_CHARTS = [
@@ -37,7 +37,6 @@ NETEASE_CHARTS = [
     ("71384707", "古典音乐榜", "垂类精选", "纯音乐", 100, 60),
 ]
 
-# 必收常青经典代表作检索词（确保老歌神曲永远在首页“经典必听榜”和搜索里随时点播）
 CLASSIC_QUERIES = [
     "周杰伦 晴天 七里香 稻香",
     "张学友 吻别 一路上有你 祝福",
@@ -88,6 +87,32 @@ def d1_query(sql, params=None):
     return res["result"][0].get("results", [])
 
 
+def set_setting(key, value):
+    d1_query(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [str(key), str(value)],
+    )
+
+
+def load_sync_settings():
+    rows = d1_query("SELECT key, value FROM settings")
+    kv = {r["key"]: r["value"] for r in rows}
+
+    def to_int(k, default):
+        try:
+            return max(0, int(str(kv.get(k, default)).strip()))
+        except Exception:
+            return default
+
+    raw_junk = [w.strip().lower() for w in kv.get("junk_words", "").split(",") if w.strip()]
+    return {
+        "enabled": str(kv.get("sync_enabled", "1")).strip() != "0",
+        "lrc_limit": to_int("sync_lrc_limit", 450),
+        "chart_max": to_int("sync_chart_max", 120),
+        "junk_words": tuple(raw_junk) if raw_junk else DEFAULT_JUNK_WORDS,
+    }
+
+
 def norm_text(s):
     s = (s or "").lower().strip()
     s = re.sub(r"[\(（\[【].*?[\)）\]】]", "", s)
@@ -100,9 +125,9 @@ def make_norm_key(title, artist):
     return f"{norm_text(title)}|{norm_text(first_artist)}"
 
 
-def is_junk(title):
+def is_junk(title, junk_words):
     t = (title or "").lower()
-    return any(w in t for w in JUNK_WORDS)
+    return any(w in t for w in junk_words)
 
 
 def clean_lrc(raw):
@@ -152,9 +177,10 @@ def load_existing_state():
     return state
 
 
-def crawl_netease_charts(songs_map, charts_list):
-    for cid, c_title, c_cat, song_cat, sort_order, limit in NETEASE_CHARTS:
-        print(f"Fetching Netease chart: {c_title} ({cid})...")
+def crawl_netease_charts(songs_map, charts_list, chart_max, junk_words):
+    for cid, c_title, c_cat, song_cat, sort_order, default_limit in NETEASE_CHARTS:
+        limit = min(default_limit, chart_max) if chart_max > 0 else default_limit
+        print(f"Fetching Netease chart: {c_title} ({cid}, limit={limit})...")
         time.sleep(1.0)
         pl = {}
         for ep in (
@@ -178,7 +204,7 @@ def crawl_netease_charts(songs_map, charts_list):
         keys = []
         for idx, t in enumerate(tracks[:limit]):
             title = (t.get("name") or "").strip()
-            if not title or is_junk(title):
+            if not title or is_junk(title, junk_words):
                 continue
             artists = " / ".join(a.get("name", "") for a in (t.get("ar") or t.get("artists") or []) if a.get("name")) or "未知歌手"
             nk = make_norm_key(title, artists)
@@ -217,7 +243,7 @@ def crawl_netease_charts(songs_map, charts_list):
         )
 
 
-def crawl_classic_evergreens(songs_map, charts_list):
+def crawl_classic_evergreens(songs_map, charts_list, junk_words):
     print("Fetching Evergreen Classic Songs...")
     classic_keys = []
     first_cover = ""
@@ -229,7 +255,7 @@ def crawl_classic_evergreens(songs_map, charts_list):
             songs = (data.get("result") or {}).get("songs") or []
             for idx, t in enumerate(songs):
                 title = (t.get("name") or "").strip()
-                if not title or is_junk(title):
+                if not title or is_junk(title, junk_words):
                     continue
                 artists = " / ".join(a.get("name", "") for a in (t.get("ar") or []) if a.get("name")) or "未知歌手"
                 nk = make_norm_key(title, artists)
@@ -317,13 +343,25 @@ def crawl_msr_official(songs_map, charts_list):
 
 
 def main():
+    cfg = load_sync_settings()
+    if not cfg["enabled"]:
+        print("Sync is paused via admin settings (sync_enabled=0). Exiting.")
+        set_setting("last_sync_at", int(time.time()))
+        set_setting("last_sync_summary", "已在后台暂停自动同步")
+        return
+
+    lrc_limit = cfg["lrc_limit"]
+    chart_max = cfg["chart_max"]
+    junk_words = cfg["junk_words"]
+    print(f"Sync config -> enabled=1, lrc_limit={lrc_limit}, chart_max={chart_max}")
+
     existing = load_existing_state()
     print(f"Existing songs in D1: {len(existing)}")
 
     songs_map = {}
     charts_list = []
-    crawl_netease_charts(songs_map, charts_list)
-    crawl_classic_evergreens(songs_map, charts_list)
+    crawl_netease_charts(songs_map, charts_list, chart_max, junk_words)
+    crawl_classic_evergreens(songs_map, charts_list, junk_words)
     crawl_msr_official(songs_map, charts_list)
 
     now = int(time.time())
@@ -335,7 +373,7 @@ def main():
         old = existing.get(nk)
         if not old:
             lrc, trans = "", ""
-            if lrc_fetched < 450:
+            if lrc_fetched < lrc_limit:
                 if "netease" in item["source_ids"]:
                     lrc, trans = fetch_netease_lyric(item["source_ids"]["netease"])
                 if not lrc:
@@ -346,7 +384,7 @@ def main():
             merged_ids = {**old["source_ids"], **item["source_ids"]}
             ids_changed = merged_ids != old["source_ids"]
             score_changed = abs(item["score"] - old["score"]) >= 50
-            need_lrc = (not old["has_lrc"]) and lrc_fetched < 450
+            need_lrc = (not old["has_lrc"]) and lrc_fetched < lrc_limit
             if ids_changed or score_changed or need_lrc:
                 lrc, trans = "", ""
                 if need_lrc:
@@ -406,6 +444,7 @@ def main():
     else:
         nk_to_id = {nk: info["id"] for nk, info in existing.items()}
 
+    synced_charts = 0
     for ch in charts_list:
         song_ids = [nk_to_id[nk] for nk in ch["norm_keys"] if nk in nk_to_id]
         if not song_ids:
@@ -419,8 +458,12 @@ def main():
               sort_order=excluded.sort_order, updated_at=excluded.updated_at""",
             [ch["id"], ch["title"], ch["category"], ch["cover"], ch["description"], json.dumps(song_ids), ch["sort_order"], now],
         )
+        synced_charts += 1
 
-    print("Sync completed successfully.")
+    summary = f"榜单 {synced_charts} 个 · 新增 {len(to_insert)} 首 · 更新 {len(to_update)} 首 · 补歌词 {lrc_fetched} 首"
+    set_setting("last_sync_at", now)
+    set_setting("last_sync_summary", summary)
+    print("Sync completed:", summary)
 
 
 if __name__ == "__main__":
