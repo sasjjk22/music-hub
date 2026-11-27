@@ -18,8 +18,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;}
   .sub-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
   .sub-card{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;gap:14px;align-items:center;}
-  .qr-box{width:112px;height:112px;background:#fff;border-radius:10px;padding:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-  .qr-box svg,.qr-box img{width:100% !important;height:100% !important;display:block;}
+  .qr-box{width:112px;height:112px;background:#fff;border-radius:10px;padding:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#475569;font-size:11px;text-align:center;}
+  .qr-box svg{width:100% !important;height:100% !important;display:block;}
   .stat{background:rgba(255,255,255,.04);padding:14px;border-radius:12px;text-align:center;}
   .stat b{font-size:24px;color:var(--acc);display:block;} .stat span{font-size:12px;color:var(--muted);}
   input,select,textarea{background:#090c14;border:1px solid #334155;color:#fff;padding:8px 10px;border-radius:8px;font-size:13px;outline:none;}
@@ -114,7 +114,7 @@ function loadAll() {
   }).catch(function(){});
 }
 
-// -------- 订阅源与二维码 Tab --------
+// -------- 订阅源与二维码 Tab（纯本地生成，绝不向第三方传输 Token） --------
 function makeQrHtml(text) {
   try {
     if (typeof qrcode === "function") {
@@ -124,7 +124,7 @@ function makeQrHtml(text) {
       return q.createSvgTag(4, 0);
     }
   } catch {}
-  return '<img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' + encodeURIComponent(text) + '" />';
+  return '<span>本地二维码组件未加载，请直接复制右侧链接</span>';
 }
 
 function copyText(id, btn) {
@@ -141,11 +141,12 @@ function renderSubsTab() {
   var tk = dashData.accessToken || "";
   var qs = tk ? ("?token=" + encodeURIComponent(tk)) : "";
   var items = [
-    { id: "sub_player", title: "📱 PWA 手机 / 网页播放器", desc: "手机扫码直接听歌，Safari 可添加到桌面当独立 App", url: base + "/player" + qs },
-    { id: "sub_mfjson", title: "🧩 MusicFree 网络订阅源 (JSON)", desc: "MusicFree -> 插件管理 -> 从网络安装（推荐）", url: base + "/musicfree.json" + qs },
+    { id: "sub_player", title: "📱 PWA 手机 / 网页播放器", desc: "手机扫码直接听歌，支持浅色/深色主题与自建歌单", url: base + "/player" + qs },
+    { id: "sub_mfjson", title: "🧩 MusicFree 网络订阅源 (JSON)", desc: "MusicFree -> 插件管理 -> 从网络安装（支持搜索/推荐歌单/导入外部歌单）", url: base + "/musicfree.json" + qs },
     { id: "sub_mfjs", title: "📄 MusicFree 单插件 JS 直链", desc: "适合直接导入单个插件脚本", url: base + "/api/mf-plugin.js" + qs },
     { id: "sub_diag", title: "🩺 全源并发体检接口", desc: "实时查看服务器到各大音源的连通率与耗时", url: base + "/api/diag" + qs },
   ];
+  window._subUrls = items.map(function(x) { return x.url; });
 
   var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' +
     '<div><h3>客户端订阅地址 & 二维码</h3><p style="font-size:12px;color:var(--muted);">当前访问密钥 (ACCESS_TOKEN)：' + (tk ? '<span class="badge ok">已自动拼接</span>' : '<span class="badge miss">未配置（免密模式）</span>') + '</p></div>' +
@@ -159,7 +160,7 @@ function renderSubsTab() {
       '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">' + it.desc + '</div>' +
       '<input id="' + it.id + '" value="' + esc(it.url) + '" readonly style="width:100%;font-size:12px;margin-bottom:8px;" onclick="this.select()" />' +
       '<div style="display:flex;gap:6px;"><button class="sm" onclick="copyText(\\'' + it.id + '\\',this)">复制链接</button>' +
-      '<button class="sm ghost" onclick="window.open(\\'' + esc(it.url) + '\\',\\'_blank\\')">打开测试</button></div></div></div>';
+      '<button class="sm ghost" onclick="window.open(window._subUrls[' + i + '],\\'_blank\\')">打开测试</button></div></div></div>';
   }
   h += '</div></div>';
   document.getElementById("main").innerHTML = h;
@@ -184,7 +185,7 @@ function testSrc(i) {
   var s = dashData.sources[i]; if (!s) return;
   var cell = document.getElementById("st-" + s.id); if (cell) cell.innerHTML = '<small>测活中...</small>';
   return req("/api/admin/source/test", { method: "POST", body: JSON.stringify({ id: s.id }) }).then(function(r) {
-    if (cell) cell.innerHTML = r.ok ? ('<span class="badge ok">' + r.status + ' · ' + r.ms + 'ms</span>') : ('<span class="badge blk">失败 ' + (r.status || r.error) + '</span>');
+    if (cell) cell.innerHTML = r.ok ? ('<span class="badge ok">' + r.status + ' · ' + r.ms + 'ms</span>') : ('<span class="badge blk">失败 ' + esc(r.status || r.error) + '</span>');
   });
 }
 function testAllSrc() { for (var i = 0; i < dashData.sources.length; i++) testSrc(i); }
@@ -221,9 +222,11 @@ function loadSongs() {
 function admPlay(i) {
   var s = songRows[i]; if (!s) return;
   document.getElementById("audBar").style.display = "flex"; document.getElementById("audTitle").textContent = "解析中: " + s.title;
-  req("/api/admin/play?id=" + s.id + "&atoken=" + encodeURIComponent(ATOKEN)).then(function(r) {
+  req("/api/admin/play?id=" + s.id).then(function(r) {
     document.getElementById("audTitle").textContent = s.title + " [" + r.source + "]";
-    var a = document.getElementById("admAudio"); a.src = r.needProxy ? r.proxyUrl : r.url; a.play().catch(function(){});
+    var a = document.getElementById("admAudio");
+    var playUrl = r.needProxy ? (r.proxyUrl + (r.proxyUrl.slice(-7) === "atoken=" ? encodeURIComponent(ATOKEN) : "")) : r.url;
+    a.src = playUrl; a.play().catch(function(){});
   }).catch(function(e) { document.getElementById("audTitle").textContent = "失败: " + e.message; });
 }
 function openEditSong(i) {
