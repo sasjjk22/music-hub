@@ -316,7 +316,6 @@ async function fetchNeteasePlaylistDetail(pid, limit = 150) {
       let rawTracks = Array.isArray(pl.tracks) ? pl.tracks.slice() : [];
       const allIds = Array.isArray(pl.trackIds) ? pl.trackIds.map((x) => x.id).filter(Boolean) : [];
 
-      // 若网易云只返回了部分 tracks，利用 trackIds 批量调 v3/song/detail 补全其余曲目
       if (allIds.length > rawTracks.length && rawTracks.length < limit) {
         const haveIds = new Set(rawTracks.map((t) => String(t.id)));
         const missingIds = allIds.slice(0, limit).filter((tid) => !haveIds.has(String(tid)));
@@ -403,7 +402,6 @@ async function importExternalPlaylist(urlLike, env) {
   return null;
 }
 
-// ---------- 电台与相似推荐引擎 ----------
 async function fetchNeteaseSimiSongs(songId) {
   if (!songId || !/^\d+$/.test(String(songId))) return [];
   try {
@@ -827,7 +825,7 @@ export default {
         if (!(await checkAdmin(request, env))) return json({ error: env.ADMIN_PASSWORD ? "会话过期，请重新登录" : "未配置 ADMIN_PASSWORD Secret" }, 401);
 
         if (path === "/api/admin/stats" && request.method === "GET") {
-          const [sCount, bCount, cCount, lCount, cats, srcs, charts, junk] = await Promise.all([
+          const [sCount, bCount, cCount, lCount, cats, srcs, charts, settingsRes] = await Promise.all([
             env.DB.prepare("SELECT COUNT(*) AS c FROM songs WHERE is_blocked=0").first(),
             env.DB.prepare("SELECT COUNT(*) AS c FROM songs WHERE is_blocked=1").first(),
             env.DB.prepare("SELECT COUNT(*) AS c FROM charts").first(),
@@ -835,9 +833,24 @@ export default {
             env.DB.prepare("SELECT category, COUNT(*) AS c FROM songs WHERE is_blocked=0 GROUP BY category ORDER BY c DESC").all(),
             env.DB.prepare("SELECT * FROM sources ORDER BY priority ASC").all(),
             env.DB.prepare("SELECT id,title,category,sort_order FROM charts ORDER BY sort_order ASC").all(),
-            env.DB.prepare("SELECT value FROM settings WHERE key='junk_words'").first(),
+            env.DB.prepare("SELECT key, value FROM settings WHERE key IN ('junk_words','sync_enabled','sync_lrc_limit','sync_chart_max','last_sync_at','last_sync_summary')").all(),
           ]);
-          return json({ stats: { songs: sCount?.c || 0, blocked: bCount?.c || 0, charts: cCount?.c || 0, lyrics: lCount?.c || 0 }, categories: cats.results || [], sources: srcs.results || [], charts: charts.results || [], junkWords: junk?.value || DEFAULT_JUNK_WORDS.join(","), accessToken: env.ACCESS_TOKEN || "" });
+          const kv = Object.fromEntries((settingsRes.results || []).map((r) => [r.key, r.value]));
+          return json({
+            stats: { songs: sCount?.c || 0, blocked: bCount?.c || 0, charts: cCount?.c || 0, lyrics: lCount?.c || 0 },
+            categories: cats.results || [],
+            sources: srcs.results || [],
+            charts: charts.results || [],
+            junkWords: kv.junk_words || DEFAULT_JUNK_WORDS.join(","),
+            syncConfig: {
+              enabled: kv.sync_enabled !== "0",
+              lrcLimit: Number(kv.sync_lrc_limit ?? 450),
+              chartMax: Number(kv.sync_chart_max ?? 120),
+              lastSyncAt: Number(kv.last_sync_at || 0),
+              lastSyncSummary: kv.last_sync_summary || "暂无同步记录",
+            },
+            accessToken: env.ACCESS_TOKEN || "",
+          });
         }
         if (path === "/api/admin/songs" && request.method === "GET") {
           const q = (url.searchParams.get("q") || "").trim(), cat = (url.searchParams.get("cat") || "").trim(), filter = url.searchParams.get("filter") || "all", sort = url.searchParams.get("sort") || "score", page = Math.max(1, Number(url.searchParams.get("page") || 1)), limit = 25, offset = (page - 1) * limit;
@@ -917,7 +930,7 @@ export default {
           const chartTitle = String(body.chartTitle || detail.title || "导入歌单").trim();
           await env.DB.prepare(`INSERT INTO charts (id,title,category,cover,description,song_ids_json,sort_order,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,category=excluded.category,cover=excluded.cover,song_ids_json=excluded.song_ids_json,updated_at=excluded.updated_at`).bind(`ne_${pid}`, chartTitle, chartCat, detail.cover, detail.description.slice(0, 120), JSON.stringify(songIds), 45, now).run();
           await purgeHomeCache(ctx);
-          ctx.waitUntil(caches.default.delete(new Request(`https://cache.internal/v6/chart/${encodeURIComponent(`ne_${pid}`)}`)));
+          ctx.waitUntil(caches.default.delete(new Request("https://cache.internal/v6/chart/" + encodeURIComponent("ne_" + pid))));
           return json({ ok: true, title: chartTitle, importedCount: songIds.length });
         }
         if (path === "/api/admin/chart/update" && request.method === "POST") {
@@ -932,8 +945,16 @@ export default {
           return json({ ok: true });
         }
         if (path === "/api/admin/settings" && request.method === "POST") {
-          await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('junk_words', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String((await request.json()).junkWords || "")).run();
-          invalidateCfgCache();
+          const b = await request.json().catch(() => ({}));
+          const pairs = [];
+          if (b.junkWords !== undefined) pairs.push(["junk_words", String(b.junkWords || "")]);
+          if (b.syncEnabled !== undefined) pairs.push(["sync_enabled", b.syncEnabled ? "1" : "0"]);
+          if (b.syncLrcLimit !== undefined) pairs.push(["sync_lrc_limit", String(Math.max(0, Number(b.syncLrcLimit) || 0))]);
+          if (b.syncChartMax !== undefined) pairs.push(["sync_chart_max", String(Math.max(10, Number(b.syncChartMax) || 120))]);
+          if (pairs.length) {
+            await env.DB.batch(pairs.map(([k, v]) => env.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(k, v)));
+            invalidateCfgCache();
+          }
           return json({ ok: true });
         }
         if (path === "/api/admin/source" && request.method === "POST") {
@@ -972,6 +993,8 @@ export default {
             return json({ ok: false, error: e.message, ms: Date.now() - t0 });
           }
         }
+        return json({ error: "Unknown admin route" }, 404);
+      }
 
       if (path === "/api/stream") {
         if (!(checkToken(request, env, pathToken) || (await checkAdmin(request, env)))) return json({ error: "Unauthorized" }, 401);
