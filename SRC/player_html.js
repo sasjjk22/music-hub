@@ -165,13 +165,18 @@ export const PLAYER_HTML = `<!DOCTYPE html>
   .src-item.cur{background:var(--acc);color:var(--acc-text);border-color:var(--acc);font-weight:700;}
   .src-item.warn{color:var(--warn);border-color:rgba(251,191,36,.38);}
 
-  .lrc-scroll{position:relative;flex:1;min-height:0;overflow-y:auto;padding:16vh 4px;-webkit-mask-image:linear-gradient(transparent,black 14%,black 86%,transparent);mask-image:linear-gradient(transparent,black 14%,black 86%,transparent);}
+  .lrc-scroll{position:relative;flex:1;min-height:0;overflow-y:auto;padding:12vh 4px;-webkit-mask-image:linear-gradient(transparent,black 12%,black 88%,transparent);mask-image:linear-gradient(transparent,black 12%,black 88%,transparent);}
   .lrc-row{padding:8px 10px;font-size:15px;font-weight:600;color:var(--lrc-dim);cursor:pointer;border-radius:8px;transition:.2s;line-height:1.48;}
   .lrc-row:hover{color:var(--lrc-hover);}
   .lrc-row.cur{color:var(--lrc-cur);font-size:19px;font-weight:700;}
   .lrc-row small{display:block;font-size:12px;font-weight:400;margin-top:2px;opacity:.78;}
 
-  .dock{min-height:76px;flex-shrink:0;background:var(--dock);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-top:1px solid var(--line);padding:8px 18px calc(8px + env(safe-area-inset-bottom));display:grid;grid-template-columns:1fr 1.6fr 1fr;align-items:center;gap:14px;z-index:30;}
+  .stage-ctrls{display:none;flex-direction:column;gap:8px;padding:10px 12px;margin-top:8px;background:var(--panel);border:1px solid var(--line);border-radius:14px;flex-shrink:0;}
+  .stage-ctrls-row{display:flex;align-items:center;justify-content:space-around;gap:10px;}
+
+  .dock{position:relative;min-height:76px;flex-shrink:0;background:var(--dock);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-top:1px solid var(--line);padding:8px 18px calc(8px + env(safe-area-inset-bottom));display:grid;grid-template-columns:1fr 1.6fr 1fr;align-items:center;gap:14px;z-index:30;}
+  .dock-mini-bar{position:absolute;top:0;left:0;right:0;height:2px;background:rgba(128,128,128,.16);overflow:hidden;display:none;}
+  .dock-mini-fill{height:100%;width:0%;background:var(--acc);transition:width .2s linear;}
   .dock-l{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;}
   .dock-cov{width:44px;height:44px;border-radius:9px;object-fit:cover;background:var(--thumb-bg);flex-shrink:0;}
   .dock-m{display:flex;flex-direction:column;align-items:center;gap:4px;}
@@ -179,7 +184,7 @@ export const PLAYER_HTML = `<!DOCTYPE html>
   .play-fab{width:34px;height:34px;border-radius:50%;background:var(--fab-bg);color:var(--fab-txt);border:none;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .prog{width:100%;max-width:460px;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);}
   .prog input{flex:1;height:4px;accent-color:var(--acc);cursor:pointer;}
-  .dock-r{display:flex;align-items:center;justify-content:flex-end;gap:8px;}
+  .dock-r{display:flex;align-items:center;justify-content:flex-end;gap:6px;}
   .vol{width:76px;height:4px;accent-color:var(--acc);cursor:pointer;}
 
   .auth-wrap{max-width:360px;margin:12vh auto;background:var(--panel);border:1px solid var(--line);padding:24px;border-radius:16px;text-align:center;}
@@ -203,10 +208,12 @@ export const PLAYER_HTML = `<!DOCTYPE html>
     .workspace{grid-template-columns:1fr;}
     .left-pane{padding:12px 12px 24px;}
     .left-pane.hide-m{display:none;}
-    .right-stage{display:none;padding:16px;}
+    .right-stage{display:none;padding:14px 14px 12px;}
     .right-stage.show-m{display:flex;}
+    .stage-ctrls{display:flex;}
     .m-only{display:inline-flex;}
     .dock{grid-template-columns:1fr auto;padding:8px 12px calc(10px + env(safe-area-inset-bottom));min-height:calc(66px + env(safe-area-inset-bottom));}
+    .dock-mini-bar{display:block;}
     .dock-m,.vol,.hide-m{display:none !important;}
     .topbar{height:auto;flex-wrap:wrap;padding:calc(10px + env(safe-area-inset-top)) 12px 8px;gap:8px;}
     .brand{order:1;margin-right:auto;}
@@ -265,11 +272,22 @@ export const PLAYER_HTML = `<!DOCTYPE html>
         </div>
         <div class="src-bar" id="srcBar"><span style="font-size:11px;color:var(--muted);">可用音源将在此处实时显示，可随时点击切换</span></div>
         <div class="lrc-scroll" id="lrcBox"><div class="lrc-row">点击歌曲后，歌词将在此处同步滚动</div></div>
+        <div class="stage-ctrls">
+          <div class="prog" style="max-width:none;"><span id="mCurT">0:00</span><input type="range" id="mSeek" min="0" max="100" value="0" oninput="seekPct(this.value)" /><span id="mDurT">0:00</span></div>
+          <div class="stage-ctrls-row">
+            <button class="ico-btn" id="modeBtnM" onclick="toggleMode()">顺序</button>
+            <button class="ico-btn" style="font-size:18px;" onclick="prevSong()">&#9198;</button>
+            <button class="play-fab" style="width:40px;height:40px;font-size:15px;" id="playFabS" onclick="togglePlay()">&#9654;</button>
+            <button class="ico-btn" style="font-size:18px;" onclick="nextSong()">&#9197;</button>
+            <button class="ico-btn" onclick="openTimer()" title="定时关闭">⏰</button>
+          </div>
+        </div>
       </div>
     </aside>
   </div>
 
   <footer class="dock">
+    <div class="dock-mini-bar"><div class="dock-mini-fill" id="dockMiniFill"></div></div>
     <div class="dock-l" onclick="toggleMobileStage(true)">
       <img id="dCov" class="dock-cov" referrerpolicy="no-referrer" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect fill='%23161e2e' width='100' height='100'/%3E%3C/svg%3E" />
       <div class="s-main"><div class="s-t" id="dTitle">未播放</div><div class="s-a" id="dArtist">点击选歌</div></div>
@@ -286,8 +304,9 @@ export const PLAYER_HTML = `<!DOCTYPE html>
     <div class="dock-r">
       <button class="ico-btn hide-m" id="muteBtn" onclick="toggleMute()" title="静音(M)">🔊</button>
       <input class="vol" id="volRange" type="range" min="0" max="1" step="0.02" value="0.9" oninput="setVolume(this.value)" />
+      <button class="ico-btn m-only" onclick="prevSong()" title="上一首">&#9198;</button>
       <button class="play-fab m-only" id="playFabM" onclick="togglePlay()">&#9654;</button>
-      <button class="ico-btn m-only" onclick="nextSong()">&#9197;</button>
+      <button class="ico-btn m-only" onclick="nextSong()" title="下一首">&#9197;</button>
     </div>
   </footer>
 </div>
@@ -314,7 +333,13 @@ var savedVol = Number(localStorage.getItem("mh_vol"));
 if (isNaN(savedVol) || savedVol < 0 || savedVol > 1) savedVol = 0.9;
 audio.volume = savedVol;
 document.getElementById("volRange").value = savedVol;
-document.getElementById("modeBtn").textContent = playMode === "one" ? "单曲" : playMode === "shuffle" ? "随机" : "顺序";
+function syncModeBtns() {
+  var txt = playMode === "one" ? "单曲" : playMode === "shuffle" ? "随机" : "顺序";
+  var b1 = document.getElementById("modeBtn"), b2 = document.getElementById("modeBtnM");
+  if (b1) b1.textContent = txt;
+  if (b2) b2.textContent = txt;
+}
+syncModeBtns();
 
 var favs = JSON.parse(localStorage.getItem("mh_favs") || "[]");
 var mySheets = JSON.parse(localStorage.getItem("mh_playlists_v1") || "[]");
@@ -335,7 +360,8 @@ var DEFAULT_RADIOS = [
   { id: "acg", title: "二次元 · 游戏原声", desc: "ACG 主题曲与塞壬唱片官方无损库", icon: "🎧", grad: "linear-gradient(135deg,#2563eb,#06b6d4)" },
   { id: "drive", title: "公路驾驶 · 燃曲电音", desc: "摇滚、节奏电音，提神醒脑", icon: "🚗", grad: "linear-gradient(135deg,#dc2626,#f97316)" }
 ];
-var JUNK_W = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版"];
+var JUNK_W = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x"];
+var SOFT_W = ["live", "现场", "演唱会", "翻唱", "cover", "吉他版", "钢琴版", "纯享", "加速", "降调"];
 
 function esc(s) { return String(s || "").replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
 function fmt(s) { var m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ":" + (r < 10 ? "0" : "") + r; }
@@ -345,14 +371,29 @@ function thumb(u, sz) {
   if (u.indexOf("music.126.net") >= 0 && u.indexOf("?") < 0) return u + "?param=" + (sz || 220) + "y" + (sz || 220);
   return u;
 }
-function isJunkLocal(name, orig) {
-  var n = String(name || "").toLowerCase(), o = String(orig || "").toLowerCase();
-  return JUNK_W.some(function(w) { return n.indexOf(w) >= 0 && o.indexOf(w) < 0; });
+function normStrLocal(s) {
+  return String(s || "").toLowerCase().split("(")[0].split("（")[0].split("[")[0].split("【")[0].replace(/\\s+/g, " ").trim();
+}
+function scoreMatchLocal(cName, cArtist, oTitle, oArtist, cDur, oDur) {
+  var raw = String(cName || "").toLowerCase(), ro = String(oTitle || "").toLowerCase();
+  if (!raw) return -999;
+  for (var i = 0; i < JUNK_W.length; i++) if (raw.indexOf(JUNK_W[i]) >= 0 && ro.indexOf(JUNK_W[i]) < 0) return -999;
+  var d = Number(cDur || 0), od = Number(oDur || 0);
+  if (od >= 90 && d > 0 && (d <= 65 || d < od * 0.72)) return -999;
+  var sc = 0, t = normStrLocal(cName), ot = normStrLocal(oTitle);
+  sc += (t === ot) ? 55 : ((t.indexOf(ot) >= 0 || ot.indexOf(t) >= 0) ? 20 : -45);
+  var oa = normStrLocal(String(oArtist || "").split(/[/,、&]/)[0]), ca = normStrLocal(Array.isArray(cArtist) ? cArtist.join(" ") : cArtist);
+  if (oa && oa !== "未知歌手") sc += (ca && (ca.indexOf(oa) >= 0 || oa.indexOf(ca) >= 0)) ? 65 : (ca ? -120 : 0);
+  for (var j = 0; j < SOFT_W.length; j++) if (raw.indexOf(SOFT_W[j]) >= 0 && ro.indexOf(SOFT_W[j]) < 0) sc -= 45;
+  if (od > 30 && d > 0) {
+    var diff = Math.abs(d - od);
+    sc += (diff <= 5) ? 45 : (diff <= 15 ? 20 : (diff > 35 ? -40 : 0));
+  }
+  return sc;
 }
 function toast(msg, keepMs) {
   var el = document.getElementById("toast");
-  el.textContent = msg;
-  el.classList.add("show");
+  el.textContent = msg; el.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(function() { el.classList.remove("show"); }, keepMs || 2600);
 }
@@ -362,15 +403,13 @@ function closeModal() { document.getElementById("modalBg").classList.remove("ope
 // -------- 主题切换 --------
 function syncThemeBtn() {
   var cur = document.documentElement.getAttribute("data-theme") || "dark";
-  var btn = document.getElementById("themeBtn");
-  if (btn) btn.textContent = cur === "dark" ? "☀️" : "🌙";
+  var btn = document.getElementById("themeBtn"); if (btn) btn.textContent = cur === "dark" ? "☀️" : "🌙";
 }
 function toggleTheme() {
   var cur = document.documentElement.getAttribute("data-theme") || "dark";
   var next = cur === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
-  localStorage.setItem("mh_theme", next);
-  syncThemeBtn();
+  localStorage.setItem("mh_theme", next); syncThemeBtn();
   toast(next === "light" ? "已切换为浅色主题" : "已切换为深色主题");
 }
 syncThemeBtn();
@@ -378,7 +417,6 @@ syncThemeBtn();
 // -------- 下载管理器 --------
 var hasFsApi = typeof window.showDirectoryPicker === "function";
 var cachedDirHandle = null;
-
 function openFsDb() {
   return new Promise(function(resolve, reject) {
     if (!window.indexedDB) return reject(new Error("no_idb"));
@@ -408,55 +446,32 @@ function saveDirHandle(h) {
   }).catch(function(){});
 }
 function clearDirHandle() {
-  cachedDirHandle = null;
-  updateDlBtnLabel();
-  return openFsDb().then(function(db) {
-    var tx = db.transaction("handles", "readwrite");
-    tx.objectStore("handles").delete("dl_dir");
-  }).catch(function(){});
+  cachedDirHandle = null; updateDlBtnLabel();
+  return openFsDb().then(function(db) { db.transaction("handles", "readwrite").objectStore("handles").delete("dl_dir"); }).catch(function(){});
 }
 function updateDlBtnLabel() {
-  var btn = document.getElementById("dlDirBtn");
-  if (!btn) return;
-  if (cachedDirHandle && cachedDirHandle.name) {
-    btn.textContent = "📁 " + cachedDirHandle.name.slice(0, 8);
-    btn.title = "当前默认保存目录：" + cachedDirHandle.name + "（点击更改）";
-  } else {
-    btn.textContent = "📁";
-    btn.title = "设置默认下载保存文件夹";
-  }
+  var btn = document.getElementById("dlDirBtn"); if (!btn) return;
+  if (cachedDirHandle && cachedDirHandle.name) { btn.textContent = "📁 " + cachedDirHandle.name.slice(0, 8); btn.title = "默认保存目录：" + cachedDirHandle.name; }
+  else { btn.textContent = "📁"; btn.title = "设置默认下载文件夹"; }
 }
-if (hasFsApi) {
-  getSavedDirHandle().then(function(h) { cachedDirHandle = h; updateDlBtnLabel(); });
-}
+if (hasFsApi) getSavedDirHandle().then(function(h) { cachedDirHandle = h; updateDlBtnLabel(); });
 
 async function pickDownloadDir() {
   if (!hasFsApi) { toast("当前浏览器不支持固定文件夹，将走浏览器默认下载位置"); return null; }
   try {
     var h = await window.showDirectoryPicker({ mode: "readwrite" });
-    cachedDirHandle = h;
-    await saveDirHandle(h);
-    updateDlBtnLabel();
-    toast("已设置默认保存目录：" + h.name);
-    return h;
+    cachedDirHandle = h; await saveDirHandle(h); updateDlBtnLabel();
+    toast("已设置默认保存目录：" + h.name); return h;
   } catch (e) {
-    if (e && e.name === "AbortError") toast("已取消选择保存目录");
-    else toast("无法访问该目录：" + (e.message || e));
+    if (e && e.name === "AbortError") toast("已取消选择保存目录"); else toast("无法访问目录：" + (e.message || e));
     return null;
   }
 }
-
 function openDlSettings() {
   var curName = (cachedDirHandle && cachedDirHandle.name) ? cachedDirHandle.name : "尚未设置（首次下载时自动询问）";
-  openModal('<h3>下载保存位置设置</h3>' +
-    '<p style="font-size:13px;color:var(--muted);margin-bottom:10px;">桌面版 Chrome / Edge 支持记住你选定的文件夹，后续点击下载会自动存入该位置。</p>' +
-    '<div style="padding:10px 12px;border-radius:10px;background:var(--panel);border:1px solid var(--line);font-size:13px;margin-bottom:14px;">当前默认目录：<b>' + esc(curName) + '</b></div>' +
-    '<div class="modal-row"><button class="btn danger" onclick="clearDirHandle();closeModal();toast(\\'已清除记忆目录，下次下载将重新选择\\')">清除记忆</button><button class="btn ghost" onclick="closeModal()">关闭</button><button class="btn" onclick="pickDownloadDir().then(function(h){if(h)closeModal();})">选择 / 更改文件夹</button></div>');
+  openModal('<h3>下载保存位置设置</h3><p style="font-size:13px;color:var(--muted);margin-bottom:10px;">桌面版 Chrome / Edge 支持记住你选定的文件夹，后续点击下载会自动存入该位置。</p><div style="padding:10px 12px;border-radius:10px;background:var(--panel);border:1px solid var(--line);font-size:13px;margin-bottom:14px;">当前默认目录：<b>' + esc(curName) + '</b></div><div class="modal-row"><button class="btn danger" onclick="clearDirHandle();closeModal();toast(\\'已清除记忆目录\\')">清除记忆</button><button class="btn ghost" onclick="closeModal()">关闭</button><button class="btn" onclick="pickDownloadDir().then(function(h){if(h)closeModal();})">选择 / 更改文件夹</button></div>');
 }
-
-function cleanFileName(s) {
-  return String(s || "music").replace(/[\\\\/:*?"<>|]/g, "_").replace(/\\s+/g, " ").trim().slice(0, 100);
-}
+function cleanFileName(s) { return String(s || "music").replace(/[\\\\/:*?"<>|]/g, "_").replace(/\\s+/g, " ").trim().slice(0, 100); }
 function extFromCt(ct) {
   var c = String(ct || "").toLowerCase();
   if (c.indexOf("flac") >= 0) return ".flac";
@@ -466,104 +481,57 @@ function extFromCt(ct) {
   return ".mp3";
 }
 function triggerBrowserDownload(url, fname) {
-  var a = document.createElement("a");
-  a.href = url; a.download = fname; a.style.display = "none";
-  document.body.appendChild(a); a.click();
-  setTimeout(function() { document.body.removeChild(a); }, 1000);
+  var a = document.createElement("a"); a.href = url; a.download = fname; a.style.display = "none";
+  document.body.appendChild(a); a.click(); setTimeout(function() { document.body.removeChild(a); }, 1000);
 }
-
 async function resolveSongDownloadUrl(s) {
-  if (curSong && curSong.norm_key === s.norm_key && curCandIdx >= 0 && candidates[curCandIdx] && !candidates[curCandIdx].isTrial) {
-    return candidates[curCandIdx].url;
-  }
+  if (curSong && curSong.norm_key === s.norm_key && curCandIdx >= 0 && candidates[curCandIdx] && !candidates[curCandIdx].isTrial) return candidates[curCandIdx].url;
   var qUrl = "/api/play?id=" + (s.id || 0) + "&q=high&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "") + "&album=" + encodeURIComponent(s.album || "") + "&cover=" + encodeURIComponent(s.cover || "") + "&duration=" + (s.duration || 0);
   var res = await api(qUrl);
   if (res.songId) s.id = res.songId;
   if (res.error || !res.url) throw new Error(res.error || "未找到可用完整音源");
   return res.needProxy ? res.proxyUrl : res.url;
 }
-
 async function downloadSong(s) {
   if (!s) return;
-  var baseName = cleanFileName(s.title + " - " + s.artist);
-  var dirHandle = null;
-
+  var baseName = cleanFileName(s.title + " - " + s.artist), dirHandle = null;
   if (hasFsApi) {
     try {
       dirHandle = cachedDirHandle || await getSavedDirHandle();
-      if (!dirHandle) {
-        dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
-        cachedDirHandle = dirHandle;
-        await saveDirHandle(dirHandle);
-        updateDlBtnLabel();
-      } else {
+      if (!dirHandle) { dirHandle = await window.showDirectoryPicker({ mode: "readwrite" }); cachedDirHandle = dirHandle; await saveDirHandle(dirHandle); updateDlBtnLabel(); }
+      else {
         var perm = await dirHandle.queryPermission({ mode: "readwrite" });
-        if (perm !== "granted") {
-          perm = await dirHandle.requestPermission({ mode: "readwrite" });
-          if (perm !== "granted") { toast("目录写入权限未授予，请重新选择保存位置"); return; }
-        }
+        if (perm !== "granted") { perm = await dirHandle.requestPermission({ mode: "readwrite" }); if (perm !== "granted") { toast("目录写入权限未授予"); return; } }
       }
-    } catch (e) {
-      if (e && e.name === "AbortError") { toast("已取消下载"); return; }
-      dirHandle = null;
-    }
+    } catch (e) { if (e && e.name === "AbortError") { toast("已取消下载"); return; } dirHandle = null; }
   }
-
   toast("正在解析下载地址：" + s.title, 5000);
   var audioUrl = "";
-  try { audioUrl = await resolveSongDownloadUrl(s); }
-  catch (err) { toast("下载失败：" + (err.message || "未获取到音频地址")); return; }
-
+  try { audioUrl = await resolveSongDownloadUrl(s); } catch (err) { toast("下载失败：" + (err.message || "未获取到地址")); return; }
   var proxyDlUrl = "/api/stream?u=" + encodeURIComponent(audioUrl) + "&dl=1&fn=" + encodeURIComponent(baseName) + "&token=" + encodeURIComponent(TOKEN);
   if (!dirHandle) {
     triggerBrowserDownload(audioUrl.indexOf("/api/stream") === 0 ? (audioUrl + "&dl=1&fn=" + encodeURIComponent(baseName)) : proxyDlUrl, baseName + ".mp3");
-    toast("已交给浏览器下载：" + baseName);
-    return;
+    toast("已交给浏览器下载：" + baseName); return;
   }
-
   try {
     toast("正在下载：" + baseName, 15000);
     var resp;
-    try {
-      resp = await fetch(audioUrl);
-      if (!resp.ok) throw new Error("direct_fail");
-    } catch (_) {
-      resp = await fetch(proxyDlUrl);
-    }
+    try { resp = await fetch(audioUrl); if (!resp.ok) throw new Error("direct_fail"); } catch (_) { resp = await fetch(proxyDlUrl); }
     if (!resp.ok) throw new Error("HTTP " + resp.status);
-
-    var ct = resp.headers.get("content-type") || "";
-    var ext = extFromCt(ct);
-    var finalName = baseName + ext;
-    var total = Number(resp.headers.get("content-length") || 0);
-    var fileHandle = await dirHandle.getFileHandle(finalName, { create: true });
-    var writable = await fileHandle.createWritable();
-
+    var ext = extFromCt(resp.headers.get("content-type") || ""), finalName = baseName + ext, total = Number(resp.headers.get("content-length") || 0);
+    var fileHandle = await dirHandle.getFileHandle(finalName, { create: true }), writable = await fileHandle.createWritable();
     if (resp.body && resp.body.getReader) {
       var reader = resp.body.getReader(), loaded = 0;
       while (true) {
-        var chunk = await reader.read();
-        if (chunk.done) break;
-        await writable.write(chunk.value);
-        loaded += chunk.value.byteLength;
-        if (total > 0) {
-          var pct = Math.min(100, Math.round((loaded / total) * 100));
-          toast("下载中 " + pct + "%：" + baseName, 10000);
-        }
+        var chunk = await reader.read(); if (chunk.done) break;
+        await writable.write(chunk.value); loaded += chunk.value.byteLength;
+        if (total > 0) toast("下载中 " + Math.min(100, Math.round((loaded / total) * 100)) + "%：" + baseName, 10000);
       }
       await writable.close();
-    } else {
-      var blob = await resp.blob();
-      await writable.write(blob);
-      await writable.close();
-    }
+    } else { await writable.write(await resp.blob()); await writable.close(); }
     toast("已保存到「" + dirHandle.name + "」：" + finalName, 3600);
-  } catch (err) {
-    toast("写入失败，转为浏览器下载：" + (err.message || ""));
-    triggerBrowserDownload(proxyDlUrl, baseName + ".mp3");
-  }
+  } catch (err) { toast("写入失败，转为浏览器下载"); triggerBrowserDownload(proxyDlUrl, baseName + ".mp3"); }
 }
-
 function downloadViewIdx(i) { if (viewSongs[i]) downloadSong(viewSongs[i]); }
 function downloadCur() { if (curSong) downloadSong(curSong); else toast("请先选择一首歌曲"); }
 
@@ -578,73 +546,44 @@ function api(path, opts) {
 }
 function showAuth() {
   document.getElementById("leftPane").innerHTML = '<div class="auth-wrap"><h3>输入访问密钥</h3><input id="tkIn" type="password" placeholder="ACCESS_TOKEN" /><button class="btn" style="width:100%;" onclick="saveToken()">进入</button></div>';
-  var tkIn = document.getElementById("tkIn");
-  if (tkIn) tkIn.addEventListener("keydown", function(e) { if (e.key === "Enter") saveToken(); });
+  var tkIn = document.getElementById("tkIn"); if (tkIn) tkIn.addEventListener("keydown", function(e) { if (e.key === "Enter") saveToken(); });
 }
-function saveToken() {
-  TOKEN = document.getElementById("tkIn").value.trim();
-  localStorage.setItem("mh_token", TOKEN);
-  localStorage.removeItem("mh_home_v3");
-  nav("discover");
-}
-function toggleMobileStage(show) {
-  document.getElementById("leftPane").classList.toggle("hide-m", show);
-  document.getElementById("rightStage").classList.toggle("show-m", show);
-}
+function saveToken() { TOKEN = document.getElementById("tkIn").value.trim(); localStorage.setItem("mh_token", TOKEN); localStorage.removeItem("mh_home_v3"); nav("discover"); }
+function toggleMobileStage(show) { document.getElementById("leftPane").classList.toggle("hide-m", show); document.getElementById("rightStage").classList.toggle("show-m", show); }
 function setNav(id) {
-  curTabName = id;
-  toggleMobileStage(false);
-  ["discover", "radio", "albums", "artists", "queue", "fav", "sheets"].forEach(function(k) {
-    var el = document.getElementById("n-" + k);
-    if (el) el.classList.toggle("active", k === id);
-  });
+  curTabName = id; toggleMobileStage(false);
+  ["discover", "radio", "albums", "artists", "queue", "fav", "sheets"].forEach(function(k) { var el = document.getElementById("n-" + k); if (el) el.classList.toggle("active", k === id); });
 }
 
-// -------- 个性化口味提取 & 猜你喜欢推荐 --------
+// -------- 个性化口味 & 猜你喜欢 --------
 function buildTasteProfile() {
   var artistCount = {}, catCount = {}, ids = [], seenId = {};
   var allPool = favs.concat(playHistory);
   for (var p = 0; p < mySheets.length; p++) allPool = allPool.concat((mySheets[p].songs || []).slice(0, 20));
   for (var i = 0; i < allPool.length; i++) {
-    var s = allPool[i];
-    if (!s) continue;
+    var s = allPool[i]; if (!s) continue;
     var ar = String(s.artist || "").split(/[/,、&]/)[0].trim();
     if (ar && ar !== "未知歌手") artistCount[ar] = (artistCount[ar] || 0) + 1;
-    if (s.category && s.category !== "点播收藏" && s.category !== "网易精选") {
-      catCount[s.category] = (catCount[s.category] || 0) + 1;
-    }
-    if (s.ext_source === "netease" && s.ext_id && !seenId[s.ext_id]) {
-      seenId[s.ext_id] = 1; ids.push(s.ext_id);
-    }
+    if (s.category && s.category !== "点播收藏" && s.category !== "网易精选") catCount[s.category] = (catCount[s.category] || 0) + 1;
+    if (s.ext_source === "netease" && s.ext_id && !seenId[s.ext_id]) { seenId[s.ext_id] = 1; ids.push(s.ext_id); }
   }
-  var topArtists = Object.keys(artistCount).sort(function(a, b) { return artistCount[b] - artistCount[a]; }).slice(0, 8);
-  var topCats = Object.keys(catCount).sort(function(a, b) { return catCount[b] - catCount[a]; }).slice(0, 3);
-  return { artists: topArtists, cats: topCats, ids: ids.slice(0, 12) };
+  return {
+    artists: Object.keys(artistCount).sort(function(a, b) { return artistCount[b] - artistCount[a]; }).slice(0, 8),
+    cats: Object.keys(catCount).sort(function(a, b) { return catCount[b] - catCount[a]; }).slice(0, 3),
+    ids: ids.slice(0, 12),
+  };
 }
-
 function loadRecommendedSheetsIfNeeded() {
   if (recSheets.length || recLoading) return;
   var sess = sessionStorage.getItem("mh_rec_sheets_v1");
-  if (sess) {
-    try {
-      var parsed = JSON.parse(sess);
-      if (Array.isArray(parsed) && parsed.length) { recSheets = parsed; if (curTabName === "discover") renderDiscover(); return; }
-    } catch {}
-  }
+  if (sess) { try { var parsed = JSON.parse(sess); if (Array.isArray(parsed) && parsed.length) { recSheets = parsed; if (curTabName === "discover") renderDiscover(); return; } } catch {} }
   recLoading = true;
   var prof = buildTasteProfile();
-  api("/api/radio", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "personal", artists: prof.artists, cats: prof.cats, ids: prof.ids, exclude: dislikes, needSheets: true })
-  }).then(function(d) {
-    recLoading = false;
-    if (d && Array.isArray(d.sheets) && d.sheets.length) {
-      recSheets = d.sheets;
-      sessionStorage.setItem("mh_rec_sheets_v1", JSON.stringify(recSheets));
-      if (curTabName === "discover") renderDiscover();
-    }
-  }).catch(function() { recLoading = false; });
+  api("/api/radio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "personal", artists: prof.artists, cats: prof.cats, ids: prof.ids, exclude: dislikes, needSheets: true }) })
+    .then(function(d) {
+      recLoading = false;
+      if (d && Array.isArray(d.sheets) && d.sheets.length) { recSheets = d.sheets; sessionStorage.setItem("mh_rec_sheets_v1", JSON.stringify(recSheets)); if (curTabName === "discover") renderDiscover(); }
+    }).catch(function() { recLoading = false; });
 }
 
 // -------- 导航主入口 --------
@@ -662,38 +601,28 @@ function nav(tab) {
     try {
       var cached = JSON.parse(cachedRaw);
       if (cached && cached.charts && cached.charts.length) {
-        chartsCache = cached.charts; artistsCache = cached.artists || [];
-        radioStations = cached.radioStations || DEFAULT_RADIOS;
+        chartsCache = cached.charts; artistsCache = cached.artists || []; radioStations = cached.radioStations || DEFAULT_RADIOS;
         if (tab === "artists") renderArtists(); else renderDiscover();
       }
     } catch {}
-  } else {
-    document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">正在加载...</div>';
-  }
+  } else { document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">正在加载...</div>'; }
 
   api("/api/home").then(function(d) {
-    chartsCache = d.charts || []; artistsCache = d.artists || [];
-    radioStations = d.radioStations || DEFAULT_RADIOS;
+    chartsCache = d.charts || []; artistsCache = d.artists || []; radioStations = d.radioStations || DEFAULT_RADIOS;
     localStorage.setItem("mh_home_v3", JSON.stringify(d));
-    if (curTabName === "artists") renderArtists();
-    else if (curTabName === "radio") renderRadioPage();
-    else if (curTabName === "discover") renderDiscover();
+    if (curTabName === "artists") renderArtists(); else if (curTabName === "radio") renderRadioPage(); else if (curTabName === "discover") renderDiscover();
   }).catch(function(){});
 }
 
 function renderDiscover() {
   loadRecommendedSheetsIfNeeded();
   var stations = radioStations.length ? radioStations : DEFAULT_RADIOS;
-  var h = '<div class="sec-head"><div class="sec-title">🎧 专属电台 · 一键开播</div><button class="btn ghost sm" onclick="nav(\\'radio\\')">全部电台</button></div>' +
-    '<div class="radio-grid" style="margin-bottom:18px;">';
+  var h = '<div class="sec-head"><div class="sec-title">🎧 专属电台 · 一键开播</div><button class="btn ghost sm" onclick="nav(\\'radio\\')">全部电台</button></div><div class="radio-grid" style="margin-bottom:18px;">';
   for (var r = 0; r < Math.min(4, stations.length); r++) {
     var st = stations[r];
-    h += '<div class="radio-card' + (radioMode === st.id ? " active" : "") + '" style="background:' + st.grad + '" onclick="startRadio(\\'' + st.id + '\\')">' +
-      '<div><div class="radio-ico">' + st.icon + '</div><div class="radio-t">' + esc(st.title) + '</div></div>' +
-      '<div class="radio-d">' + esc(st.desc) + '</div></div>';
+    h += '<div class="radio-card' + (radioMode === st.id ? " active" : "") + '" style="background:' + st.grad + '" onclick="startRadio(\\'' + st.id + '\\')"><div><div class="radio-ico">' + st.icon + '</div><div class="radio-t">' + esc(st.title) + '</div></div><div class="radio-d">' + esc(st.desc) + '</div></div>';
   }
   h += '</div>';
-
   if (recSheets.length) {
     h += '<div class="sec-head"><div class="sec-title">✨ 根据你的喜欢推荐歌单</div><button class="btn ghost sm" onclick="sessionStorage.removeItem(\\'mh_rec_sheets_v1\\');recSheets=[];loadRecommendedSheetsIfNeeded()">换一批</button></div><div class="cards-grid">';
     for (var rs = 0; rs < Math.min(8, recSheets.length); rs++) {
@@ -702,14 +631,12 @@ function renderDiscover() {
     }
     h += '</div>';
   }
-
   h += '<div class="sec-head"><div class="sec-title">热门歌手</div><button class="btn ghost sm" onclick="nav(\\'artists\\')">全部歌手</button></div><div class="ar-grid">';
   for (var a = 0; a < Math.min(12, artistsCache.length); a++) {
     var ar = artistsCache[a];
     h += '<div class="ar-card" onclick="openPresetArtist(' + a + ')"><div class="ar-ava" style="background:' + GRADS[a % GRADS.length] + '">' + esc(ar.name.slice(0, 1)) + '</div><div class="card-t">' + esc(ar.name) + '</div><div class="card-s">' + esc(ar.tag) + '</div></div>';
   }
   h += '</div>';
-
   var cCats = ["全部"];
   for (var j = 0; j < chartsCache.length; j++) { var cat = chartsCache[j].category || "其他"; if (cCats.indexOf(cat) < 0) cCats.push(cat); }
   window._cCats = cCats;
@@ -725,72 +652,46 @@ function renderDiscover() {
 
 // -------- 电台与无限续播 --------
 function renderRadioPage() {
-  var stations = radioStations.length ? radioStations : DEFAULT_RADIOS;
-  var prof = buildTasteProfile();
+  var stations = radioStations.length ? radioStations : DEFAULT_RADIOS, prof = buildTasteProfile();
   var tasteHint = prof.artists.length ? ("已提取你的偏好歌手：" + prof.artists.slice(0, 4).join("、")) : "多点几首红心或播歌，私人漫游会越来越懂你";
-  var h = '<div class="sec-head"><div><div class="sec-title">📻 随心电台 & 安静空间</div><div style="font-size:12px;color:var(--muted);margin-top:3px;">' + esc(tasteHint) + ' · 无限自动续播</div></div></div>' +
-    '<div class="radio-grid">';
+  var h = '<div class="sec-head"><div><div class="sec-title">📻 随心电台 & 安静空间</div><div style="font-size:12px;color:var(--muted);margin-top:3px;">' + esc(tasteHint) + ' · 无限自动续播</div></div></div><div class="radio-grid">';
   for (var i = 0; i < stations.length; i++) {
     var st = stations[i];
-    h += '<div class="radio-card' + (radioMode === st.id ? " active" : "") + '" style="background:' + st.grad + '" onclick="startRadio(\\'' + st.id + '\\')">' +
-      '<div><div class="radio-ico">' + st.icon + '</div><div class="radio-t">' + esc(st.title) + '</div></div>' +
-      '<div class="radio-d">' + esc(st.desc) + '</div></div>';
+    h += '<div class="radio-card' + (radioMode === st.id ? " active" : "") + '" style="background:' + st.grad + '" onclick="startRadio(\\'' + st.id + '\\')"><div><div class="radio-ico">' + st.icon + '</div><div class="radio-t">' + esc(st.title) + '</div></div><div class="radio-d">' + esc(st.desc) + '</div></div>';
   }
   h += '</div>';
   if (radioMode && playQueue.length) {
     var activeSt = stations.find(function(x) { return x.id === radioMode; }) || stations[0];
     viewSongs = playQueue;
-    h += '<div class="sec-head"><div class="sec-title">正在收听：' + esc(activeSt.title) + '</div><button class="btn ghost sm" onclick="startRadio(\\'' + radioMode + '\\')">换一批新歌</button></div>' +
-      buildSongsRowsHtml(playQueue, false, "");
+    h += '<div class="sec-head"><div class="sec-title">正在收听：' + esc(activeSt.title) + '</div><button class="btn ghost sm" onclick="startRadio(\\'' + radioMode + '\\')">换一批新歌</button></div>' + buildSongsRowsHtml(playQueue, false, "");
   }
   document.getElementById("leftPane").innerHTML = h;
 }
-
 function fetchRadioBatch(mode, isRefill) {
-  if (radioFetching) return;
-  radioFetching = true;
-  var prof = buildTasteProfile();
-  var ex = dislikes.concat(playHistory.slice(0, 25).map(function(x) { return x.norm_key; }));
+  if (radioFetching) return; radioFetching = true;
+  var prof = buildTasteProfile(), ex = dislikes.concat(playHistory.slice(0, 25).map(function(x) { return x.norm_key; }));
   if (isRefill) ex = ex.concat(playQueue.map(function(x) { return x.norm_key; }));
-  api("/api/radio", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: mode, artists: prof.artists, ids: prof.ids, cats: prof.cats, exclude: ex.slice(0, 120), needSheets: false })
-  }).then(function(d) {
-    radioFetching = false;
-    var songs = d.songs || [];
-    if (!songs.length) { if (!isRefill) toast("电台暂无新曲目，换个电台试试"); return; }
-    if (!isRefill) {
-      playQueue = songs; viewSongs = songs; playQueueIdx(0);
-      if (curTabName === "radio") renderRadioPage();
-      toast("已开启「" + ((d.station && d.station.title) || mode) + "」");
-    } else {
-      var seen = {}; playQueue.forEach(function(s) { seen[s.norm_key] = 1; });
-      var added = 0;
-      songs.forEach(function(s) { if (!seen[s.norm_key]) { seen[s.norm_key] = 1; playQueue.push(s); added++; } });
-      if (added && curTabName === "radio") renderRadioPage();
-    }
-  }).catch(function() { radioFetching = false; });
+  api("/api/radio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: mode, artists: prof.artists, ids: prof.ids, cats: prof.cats, exclude: ex.slice(0, 120), needSheets: false }) })
+    .then(function(d) {
+      radioFetching = false; var songs = d.songs || [];
+      if (!songs.length) { if (!isRefill) toast("电台暂无新曲目"); return; }
+      if (!isRefill) { playQueue = songs; viewSongs = songs; playQueueIdx(0); if (curTabName === "radio") renderRadioPage(); toast("已开启「" + ((d.station && d.station.title) || mode) + "」"); }
+      else {
+        var seen = {}; playQueue.forEach(function(s) { seen[s.norm_key] = 1; });
+        var added = 0; songs.forEach(function(s) { if (!seen[s.norm_key]) { seen[s.norm_key] = 1; playQueue.push(s); added++; } });
+        if (added && curTabName === "radio") renderRadioPage();
+      }
+    }).catch(function() { radioFetching = false; });
 }
-
 function startRadio(mode) { radioMode = mode; updateDislikeBtn(); toast("正在调频电台...", 3000); fetchRadioBatch(mode, false); }
 function dislikeCur() {
   if (!curSong) return;
   var nk = curSong.norm_key;
-  if (dislikes.indexOf(nk) < 0) {
-    dislikes.unshift(nk);
-    if (dislikes.length > 300) dislikes = dislikes.slice(0, 300);
-    localStorage.setItem("mh_dislikes_v1", JSON.stringify(dislikes));
-  }
+  if (dislikes.indexOf(nk) < 0) { dislikes.unshift(nk); if (dislikes.length > 300) dislikes = dislikes.slice(0, 300); localStorage.setItem("mh_dislikes_v1", JSON.stringify(dislikes)); }
   toast("已跳过，电台将减少此类推荐");
-  if (curIdx >= 0 && curIdx < playQueue.length) {
-    playQueue.splice(curIdx, 1);
-    if (playQueue.length) playQueueIdx(Math.min(curIdx, playQueue.length - 1));
-    if (curTabName === "radio") renderRadioPage();
-  }
+  if (curIdx >= 0 && curIdx < playQueue.length) { playQueue.splice(curIdx, 1); if (playQueue.length) playQueueIdx(Math.min(curIdx, playQueue.length - 1)); if (curTabName === "radio") renderRadioPage(); }
 }
 function updateDislikeBtn() { var el = document.getElementById("sDislikeBtn"); if (el) el.style.display = radioMode ? "inline-block" : "none"; }
-
 function openRecSheet(idx) {
   var sh = recSheets[idx]; if (!sh) return;
   curTabName = "detail"; backTarget = "discover";
@@ -820,22 +721,16 @@ function renderArtists() {
     h += '<div class="ar-card" onclick="openPresetArtist(' + i + ')"><div class="ar-ava" style="background:' + GRADS[i % GRADS.length] + '">' + esc(ar.name.slice(0, 1)) + '</div><div class="card-t">' + esc(ar.name) + '</div><div class="card-s">' + esc(ar.tag) + '</div></div>';
   }
   document.getElementById("leftPane").innerHTML = h + '</div>';
-  var inp = document.getElementById("arSearchIn");
-  if (inp) inp.addEventListener("keydown", function(e) { if (e.key === "Enter") searchOnlineArtists(); });
+  var inp = document.getElementById("arSearchIn"); if (inp) inp.addEventListener("keydown", function(e) { if (e.key === "Enter") searchOnlineArtists(); });
 }
 function searchOnlineArtists() {
   var q = (document.getElementById("arSearchIn")?.value || "").trim();
   if (!q) { searchedArtists = []; artistSearchKw = ""; renderArtists(); return; }
   artistSearchKw = q;
-  api("/api/artists?q=" + encodeURIComponent(q)).then(function(d) {
-    searchedArtists = d.artists || [];
-    if (!searchedArtists.length) toast("未找到相关歌手");
-    renderArtists();
-  }).catch(function(){});
+  api("/api/artists?q=" + encodeURIComponent(q)).then(function(d) { searchedArtists = d.artists || []; if (!searchedArtists.length) toast("未找到相关歌手"); renderArtists(); }).catch(function(){});
 }
 function loadAlbumsPage(q) {
-  albumQuery = q;
-  document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">加载专辑墙...</div>';
+  albumQuery = q; document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">加载专辑墙...</div>';
   api("/api/albums?q=" + encodeURIComponent(q)).then(function(d) { albumsCache = d.albums || []; renderAlbumsWall(); }).catch(function(){});
 }
 function renderAlbumsWall() {
@@ -855,9 +750,7 @@ function openArtistDetail(name, aid, tag) {
   pageState = { type: "artist", query: name, artistId: aid || "", page: 1, hasMore: false, artistAlbums: [], artistSongs: [], artistTab: "songs", artistName: name, artistTag: tag || "" };
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">检索 ' + esc(name) + ' 单曲与专辑...</div>';
   api("/api/artist?name=" + encodeURIComponent(name) + "&id=" + encodeURIComponent(aid || "") + "&page=1").then(function(d) {
-    pageState.hasMore = Boolean(d.hasMore); pageState.artistAlbums = d.albums || [];
-    pageState.artistSongs = d.songs || []; viewSongs = pageState.artistSongs;
-    renderArtistDetail();
+    pageState.hasMore = Boolean(d.hasMore); pageState.artistAlbums = d.albums || []; pageState.artistSongs = d.songs || []; viewSongs = pageState.artistSongs; renderArtistDetail();
   }).catch(function(){});
 }
 function renderArtistDetail() {
@@ -884,10 +777,7 @@ function openAlbumObj(i, fromArtist) {
   var al = fromArtist ? pageState.artistAlbums[i] : albumsCache[i]; if (!al) return;
   curTabName = "detail"; backTarget = fromArtist ? "artist" : "albums";
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">加载专辑《' + esc(al.title) + '》...</div>';
-  api("/api/album?id=" + encodeURIComponent(al.id)).then(function(d) {
-    var info = d.album || al;
-    renderSongList(info.title, (info.artist || al.artist) + " · 专辑曲目 " + (d.songs || []).length + " 首", info.cover || al.cover, d.songs || [], false);
-  }).catch(function(){});
+  api("/api/album?id=" + encodeURIComponent(al.id)).then(function(d) { var info = d.album || al; renderSongList(info.title, (info.artist || al.artist) + " · 专辑曲目 " + (d.songs || []).length + " 首", info.cover || al.cover, d.songs || [], false); }).catch(function(){});
 }
 function goBack() {
   if (backTarget === "artist" && pageState.artistName) { renderArtistDetail(); return; }
@@ -898,21 +788,14 @@ function goBack() {
 }
 function openChartIdx(i) {
   var c = chartsCache[i]; if (!c) return;
-  curTabName = "detail"; backTarget = "discover";
-  pageState = { type: "chart", query: c.id, page: 1, hasMore: false };
+  curTabName = "detail"; backTarget = "discover"; pageState = { type: "chart", query: c.id, page: 1, hasMore: false };
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">加载榜单...</div>';
-  api("/api/chart?id=" + encodeURIComponent(c.id)).then(function(d) {
-    var ch = d.chart || c;
-    renderSongList(ch.title, ch.description || "精选榜单", ch.cover || "", d.songs || [], false, true);
-  }).catch(function(){});
+  api("/api/chart?id=" + encodeURIComponent(c.id)).then(function(d) { var ch = d.chart || c; renderSongList(ch.title, ch.description || "精选榜单", ch.cover || "", d.songs || [], false, true); }).catch(function(){});
 }
 function doSearch(page) {
   var q = document.getElementById("qInput").value.trim(); if (!q) return nav("discover");
   setNav("discover"); curTabName = "detail"; backTarget = "discover";
-  if (page === 1) {
-    pageState = { type: "search", query: q, page: 1, hasMore: false }; viewSongs = [];
-    document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">全网搜索中...</div>';
-  }
+  if (page === 1) { pageState = { type: "search", query: q, page: 1, hasMore: false }; viewSongs = []; document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">全网搜索中...</div>'; }
   api("/api/search?q=" + encodeURIComponent(q) + "&page=" + page).then(function(d) {
     pageState.page = page; pageState.hasMore = Boolean(d.hasMore);
     var list = d.songs || []; viewSongs = page === 1 ? list : viewSongs.concat(list);
@@ -938,66 +821,38 @@ function makeNormKeyLocal(title, artist) {
   var n = function(x) { return String(x || "").toLowerCase().replace(/[\\(（\\[【].*?[\\)）\\]】]/g, "").replace(/\\s+/g, " ").trim(); };
   return n(title) + "|" + n(String(artist || "").split(/[/,、&]/)[0]);
 }
-
 function renderSheetsHub() {
-  var h = '<div class="sec-head"><div class="sec-title">我的自建歌单 (' + mySheets.length + ')</div>' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-    '<button class="btn" onclick="openCreateSheetModal()">+ 新建歌单</button>' +
-    '<button class="btn ghost" onclick="openImportSheetModal()">📥 导入外部歌单</button>' +
-    '</div></div>';
+  var h = '<div class="sec-head"><div class="sec-title">我的自建歌单 (' + mySheets.length + ')</div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="openCreateSheetModal()">+ 新建歌单</button><button class="btn ghost" onclick="openImportSheetModal()">📥 导入外部歌单</button></div></div>';
   if (!mySheets.length) {
-    h += '<div style="padding:48px 18px;text-align:center;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:16px;">' +
-      '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px;">还没有自建歌单</div>' +
-      '<div style="font-size:12.5px;margin-bottom:14px;">支持手动新建，或直接导入网易云 / QQ音乐 / 汽水音乐 / 酷狗 / 酷我 / 纯文本歌单</div>' +
-      '<button class="btn" onclick="openCreateSheetModal()">立即新建</button></div>';
-    document.getElementById("leftPane").innerHTML = h;
-    return;
+    h += '<div style="padding:48px 18px;text-align:center;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:16px;"><div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px;">还没有自建歌单</div><div style="font-size:12.5px;margin-bottom:14px;">支持手动新建，或直接导入网易云 / QQ音乐 / 汽水音乐 / 酷狗 / 酷我 / 纯文本歌单</div><button class="btn" onclick="openCreateSheetModal()">立即新建</button></div>';
+    document.getElementById("leftPane").innerHTML = h; return;
   }
   h += '<div class="cards-grid">';
   for (var i = 0; i < mySheets.length; i++) {
-    var sh = mySheets[i];
-    var cov = (sh.songs[0] && sh.songs[0].cover) ? thumb(sh.songs[0].cover, 240) : "";
-    h += '<div class="card" onclick="openMySheet(' + i + ')">' +
-      (cov ? '<img loading="lazy" referrerpolicy="no-referrer" src="' + esc(cov) + '" />' : '<div class="card-cov-ph" style="background:' + GRADS[i % GRADS.length] + '">' + esc(sh.name.slice(0, 1)) + '</div>') +
-      '<div class="card-body"><div class="card-t">' + esc(sh.name) + '</div><div class="card-s">' + sh.songs.length + ' 首歌曲</div></div></div>';
+    var sh = mySheets[i], cov = (sh.songs[0] && sh.songs[0].cover) ? thumb(sh.songs[0].cover, 240) : "";
+    h += '<div class="card" onclick="openMySheet(' + i + ')">' + (cov ? '<img loading="lazy" referrerpolicy="no-referrer" src="' + esc(cov) + '" />' : '<div class="card-cov-ph" style="background:' + GRADS[i % GRADS.length] + '">' + esc(sh.name.slice(0, 1)) + '</div>') + '<div class="card-body"><div class="card-t">' + esc(sh.name) + '</div><div class="card-s">' + sh.songs.length + ' 首歌曲</div></div></div>';
   }
   document.getElementById("leftPane").innerHTML = h + '</div>';
 }
-
 function openCreateSheetModal(pendingSong) {
   window._pendingAddSong = pendingSong || null;
   openModal('<h3>新建歌单</h3><input id="newSheetName" placeholder="输入歌单名称（如：深夜循环）" /><input id="newSheetDesc" placeholder="简介（选填）" /><div class="modal-row"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="confirmCreateSheet()">创建</button></div>');
   setTimeout(function() { var el = document.getElementById("newSheetName"); if (el) el.focus(); }, 50);
 }
 function confirmCreateSheet() {
-  var name = (document.getElementById("newSheetName")?.value || "").trim();
-  if (!name) return toast("请输入歌单名称");
-  var desc = (document.getElementById("newSheetDesc")?.value || "").trim();
-  var sh = { id: "pl_" + Date.now(), name: name, desc: desc, createdAt: Date.now(), songs: [] };
+  var name = (document.getElementById("newSheetName")?.value || "").trim(); if (!name) return toast("请输入歌单名称");
+  var sh = { id: "pl_" + Date.now(), name: name, desc: (document.getElementById("newSheetDesc")?.value || "").trim(), createdAt: Date.now(), songs: [] };
   if (window._pendingAddSong) { sh.songs.push(window._pendingAddSong); window._pendingAddSong = null; }
-  mySheets.unshift(sh); saveSheets(); closeModal();
-  toast("歌单《" + name + "》已创建");
+  mySheets.unshift(sh); saveSheets(); closeModal(); toast("歌单《" + name + "》已创建");
   if (curTabName === "sheets") renderSheetsHub();
 }
-
 function openMySheet(idx) {
   var sh = mySheets[idx]; if (!sh) return;
-  curTabName = "detail"; backTarget = "sheets";
-  viewSongs = sh.songs || [];
+  curTabName = "detail"; backTarget = "sheets"; viewSongs = sh.songs || [];
   var cov = (viewSongs[0] && viewSongs[0].cover) ? thumb(viewSongs[0].cover, 240) : DEFAULT_COV;
-  var h = '<div class="list-head">' + (cov !== DEFAULT_COV ? '<img class="list-cov" referrerpolicy="no-referrer" src="' + esc(cov) + '" />' : '<div class="list-cov">' + esc(sh.name.slice(0, 1)) + '</div>') +
-    '<div style="flex:1;min-width:160px;"><div style="font-size:19px;font-weight:800;">' + esc(sh.name) + '</div>' +
-    '<div style="font-size:12px;color:var(--muted);margin:4px 0 10px;">' + esc(sh.desc || "自建歌单") + ' · ' + viewSongs.length + ' 首</div>' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-    '<button class="btn" onclick="radioMode=\\'\\';playAll()">&#9654; 播放全部</button>' +
-    '<button class="btn ghost" onclick="openShareModal(' + idx + ')">📤 分享到其他软件</button>' +
-    '<button class="btn ghost" onclick="renameSheet(' + idx + ')">改名</button>' +
-    '<button class="btn danger" onclick="deleteSheet(' + idx + ')">删除</button>' +
-    '<button class="btn ghost" onclick="nav(\\'sheets\\')">返回歌单</button>' +
-    '</div></div></div>';
+  var h = '<div class="list-head">' + (cov !== DEFAULT_COV ? '<img class="list-cov" referrerpolicy="no-referrer" src="' + esc(cov) + '" />' : '<div class="list-cov">' + esc(sh.name.slice(0, 1)) + '</div>') + '<div style="flex:1;min-width:160px;"><div style="font-size:19px;font-weight:800;">' + esc(sh.name) + '</div><div style="font-size:12px;color:var(--muted);margin:4px 0 10px;">' + esc(sh.desc || "自建歌单") + ' · ' + viewSongs.length + ' 首</div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="radioMode=\\'\\';playAll()">&#9654; 播放全部</button><button class="btn ghost" onclick="openShareModal(' + idx + ')">📤 分享到其他软件</button><button class="btn ghost" onclick="renameSheet(' + idx + ')">改名</button><button class="btn danger" onclick="deleteSheet(' + idx + ')">删除</button><button class="btn ghost" onclick="nav(\\'sheets\\')">返回歌单</button></div></div></div>';
   document.getElementById("leftPane").innerHTML = h + buildSongsRowsHtml(viewSongs, false, "sheet:" + idx);
 }
-
 function renameSheet(idx) {
   var sh = mySheets[idx]; if (!sh) return;
   openModal('<h3>重命名歌单</h3><input id="rnInput" value="' + esc(sh.name) + '" /><div class="modal-row"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="var v=document.getElementById(\\'rnInput\\').value.trim();if(v){mySheets[' + idx + '].name=v;saveSheets();closeModal();openMySheet(' + idx + ');}">保存</button></div>');
@@ -1006,34 +861,20 @@ function deleteSheet(idx) {
   var sh = mySheets[idx]; if (!sh) return;
   openModal('<h3>删除歌单</h3><p style="font-size:13px;color:var(--muted);margin-bottom:14px;">确认删除《' + esc(sh.name) + '》吗？此操作不可撤销。</p><div class="modal-row"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn danger" onclick="mySheets.splice(' + idx + ',1);saveSheets();closeModal();nav(\\'sheets\\');toast(\\'已删除\\')">确认删除</button></div>');
 }
-function removeFromSheet(sheetIdx, songIdx) {
-  var sh = mySheets[sheetIdx]; if (!sh) return;
-  sh.songs.splice(songIdx, 1); saveSheets(); openMySheet(sheetIdx); toast("已从歌单移除");
-}
-function saveCurrentListAsSheet(name) {
-  if (!viewSongs.length) return toast("当前列表为空");
-  mySheets.unshift({ id: "pl_" + Date.now(), name: name || "收藏歌单", desc: "一键收藏歌单", createdAt: Date.now(), songs: viewSongs.slice() });
-  saveSheets(); toast("已收藏为自建歌单《" + (name || "收藏歌单") + "》");
-}
-
+function removeFromSheet(sheetIdx, songIdx) { var sh = mySheets[sheetIdx]; if (!sh) return; sh.songs.splice(songIdx, 1); saveSheets(); openMySheet(sheetIdx); toast("已从歌单移除"); }
+function saveCurrentListAsSheet(name) { if (!viewSongs.length) return toast("当前列表为空"); mySheets.unshift({ id: "pl_" + Date.now(), name: name || "收藏歌单", desc: "一键收藏歌单", createdAt: Date.now(), songs: viewSongs.slice() }); saveSheets(); toast("已收藏为自建歌单《" + (name || "收藏歌单") + "》"); }
 function openPickSheetModal(song) {
-  if (!song) return;
-  window._pickTargetSong = song;
+  if (!song) return; window._pickTargetSong = song;
   var h = '<h3>添加到歌单：' + esc(song.title) + '</h3>';
   if (!mySheets.length) h += '<p style="font-size:13px;color:var(--muted);margin-bottom:12px;">暂无自建歌单，请先新建一个。</p>';
-  for (var i = 0; i < mySheets.length; i++) {
-    h += '<div class="pick-item" onclick="addSongToSheet(' + i + ')"><span><b>' + esc(mySheets[i].name) + '</b></span><small style="color:var(--muted);">' + mySheets[i].songs.length + ' 首</small></div>';
-  }
+  for (var i = 0; i < mySheets.length; i++) h += '<div class="pick-item" onclick="addSongToSheet(' + i + ')"><span><b>' + esc(mySheets[i].name) + '</b></span><small style="color:var(--muted);">' + mySheets[i].songs.length + ' 首</small></div>';
   h += '<div class="modal-row"><button class="btn ghost" onclick="closeModal()">关闭</button><button class="btn" onclick="openCreateSheetModal(window._pickTargetSong)">+ 新建并加入</button></div>';
   openModal(h);
 }
 function addSongToSheet(sheetIdx) {
-  var sh = mySheets[sheetIdx], s = window._pickTargetSong;
-  if (!sh || !s) return;
+  var sh = mySheets[sheetIdx], s = window._pickTargetSong; if (!sh || !s) return;
   var nk = s.norm_key || makeNormKeyLocal(s.title, s.artist);
-  if (sh.songs.some(function(x) { return (x.norm_key || makeNormKeyLocal(x.title, x.artist)) === nk; })) {
-    closeModal(); return toast("歌曲已在《" + sh.name + "》中");
-  }
+  if (sh.songs.some(function(x) { return (x.norm_key || makeNormKeyLocal(x.title, x.artist)) === nk; })) { closeModal(); return toast("歌曲已在《" + sh.name + "》中"); }
   sh.songs.unshift({ id: s.id || 0, norm_key: nk, title: s.title, artist: s.artist, album: s.album || "", cover: s.cover || "", duration: s.duration || 0, ext_source: s.ext_source || "", ext_id: s.ext_id || "" });
   saveSheets(); closeModal(); toast("已加入《" + sh.name + "》");
 }
@@ -1041,90 +882,57 @@ function addViewToSheet(i) { if (viewSongs[i]) openPickSheetModal(viewSongs[i]);
 function addCurToSheet() { if (curSong) openPickSheetModal(curSong); else toast("请先选择一首歌曲"); }
 
 function openImportSheetModal() {
-  openModal('<h3>导入外部歌单</h3>' +
-    '<p style="font-size:12px;color:var(--muted);margin-bottom:8px;">方式 1：粘贴 网易云 / QQ音乐 / 汽水音乐 / 酷狗 / 酷我 / 分享链接</p>' +
-    '<input id="impLinkIn" placeholder="粘贴任意平台公开歌单链接或分享文案..." />' +
-    '<p style="font-size:12px;color:var(--muted);margin:6px 0;">方式 2：或直接粘贴文本歌单（每行一首：歌名 - 歌手）</p>' +
-    '<textarea id="impTextIn" rows="5" placeholder="晴天 - 周杰伦&#10;一路上有你 - 张学友&#10;十年 - 陈奕迅"></textarea>' +
-    '<input id="impNameIn" placeholder="导入后的歌单名（链接导入留空用原名）" />' +
-    '<div class="modal-row"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="confirmImportSheet()">开始导入</button></div>');
+  openModal('<h3>导入外部歌单</h3><p style="font-size:12px;color:var(--muted);margin-bottom:8px;">方式 1：粘贴 网易云 / QQ音乐 / 汽水音乐 / 酷狗 / 酷我 / 分享链接</p><input id="impLinkIn" placeholder="粘贴任意平台公开歌单链接或分享文案..." /><p style="font-size:12px;color:var(--muted);margin:6px 0;">方式 2：或直接粘贴文本歌单（每行一首：歌名 - 歌手）</p><textarea id="impTextIn" rows="5" placeholder="晴天 - 周杰伦&#10;一路上有你 - 张学友&#10;十年 - 陈奕迅"></textarea><input id="impNameIn" placeholder="导入后的歌单名（链接导入留空用原名）" /><div class="modal-row"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="confirmImportSheet()">开始导入</button></div>');
 }
 function confirmImportSheet() {
-  var link = (document.getElementById("impLinkIn")?.value || "").trim();
-  var text = (document.getElementById("impTextIn")?.value || "").trim();
-  var customName = (document.getElementById("impNameIn")?.value || "").trim();
+  var link = (document.getElementById("impLinkIn")?.value || "").trim(), text = (document.getElementById("impTextIn")?.value || "").trim(), customName = (document.getElementById("impNameIn")?.value || "").trim();
   if (link) {
     toast("正在解析歌单（大歌单约需数秒）...", 8000);
-    api("/api/import-sheet", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: link }) })
-      .then(function(d) {
-        if (d.error || !d.songs || !d.songs.length) return toast(d.error || "导入失败或歌单为空");
-        mySheets.unshift({ id: "pl_" + Date.now(), name: customName || d.title || "导入歌单", desc: d.description || "外部链接导入", createdAt: Date.now(), songs: d.songs });
-        saveSheets(); closeModal(); renderSheetsHub(); toast("成功导入 " + d.songs.length + " 首歌曲！");
-      }).catch(function() { toast("导入请求失败"); });
-    return;
+    api("/api/import-sheet", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: link }) }).then(function(d) {
+      if (d.error || !d.songs || !d.songs.length) return toast(d.error || "导入失败或歌单为空");
+      mySheets.unshift({ id: "pl_" + Date.now(), name: customName || d.title || "导入歌单", desc: d.description || "外部链接导入", createdAt: Date.now(), songs: d.songs });
+      saveSheets(); closeModal(); renderSheetsHub(); toast("成功导入 " + d.songs.length + " 首歌曲！");
+    }).catch(function() { toast("导入请求失败"); }); return;
   }
   if (text) {
     var songs = [];
     text.split(/\\r?\\n/).forEach(function(line) {
       var l = line.trim(); if (!l) return;
-      var parts = l.split(/\\s+[-—–]\\s+|\\t/);
-      var title = (parts[0] || "").trim(), artist = (parts[1] || "未知歌手").trim();
+      var parts = l.split(/\\s+[-—–]\\s+|\\t/), title = (parts[0] || "").trim(), artist = (parts[1] || "未知歌手").trim();
       if (title) songs.push({ id: 0, norm_key: makeNormKeyLocal(title, artist), title: title, artist: artist, album: "", cover: "", duration: 0 });
     });
     if (!songs.length) return toast("未识别到有效歌曲行");
     mySheets.unshift({ id: "pl_" + Date.now(), name: customName || "文本导入歌单", desc: "纯文本清单导入", createdAt: Date.now(), songs: songs });
-    saveSheets(); closeModal(); renderSheetsHub(); toast("已导入 " + songs.length + " 首歌曲");
-    return;
+    saveSheets(); closeModal(); renderSheetsHub(); toast("已导入 " + songs.length + " 首歌曲"); return;
   }
   toast("请输入歌单链接或歌曲文本");
 }
-
 function openShareModal(idx) {
   var sh = mySheets[idx]; if (!sh || !sh.songs.length) return toast("空歌单无法分享");
-  var txtList = sh.songs.map(function(s) { return s.title + " - " + s.artist; }).join("\\n");
-  var jsonText = JSON.stringify({ name: sh.name, songs: sh.songs }, null, 2);
+  var txtList = sh.songs.map(function(s) { return s.title + " - " + s.artist; }).join("\\n"), jsonText = JSON.stringify({ name: sh.name, songs: sh.songs }, null, 2);
   window._shareTxt = txtList; window._shareJson = jsonText; window._shareIdx = idx;
-  openModal('<h3>分享歌单《' + esc(sh.name) + '》</h3>' +
-    '<p style="font-size:12px;color:var(--muted);margin-bottom:8px;"><b>1. 生成云端链接</b>（可发给好友网页听歌，也可粘贴到 <b>MusicFree 导入歌单</b>）</p>' +
-    '<div style="display:flex;gap:8px;margin-bottom:12px;"><input id="cloudShareOut" readonly placeholder="点击右侧按钮生成链接..." style="margin:0;flex:1;" /><button class="btn" onclick="genCloudShare()">生成并复制</button></div>' +
-    '<p style="font-size:12px;color:var(--muted);margin-bottom:6px;"><b>2. 导出文本清单</b>（兼容网易云“一键导入外部歌单”、QQ音乐、洛雪等）</p>' +
-    '<textarea rows="5" readonly>' + esc(txtList) + '</textarea>' +
-    '<div class="modal-row"><button class="btn ghost" onclick="copyVar(window._shareTxt, \\'文本清单已复制\\')">复制文本清单</button><button class="btn ghost" onclick="copyVar(window._shareJson, \\'JSON 已复制\\')">复制 JSON</button><button class="btn" onclick="closeModal()">完成</button></div>');
+  openModal('<h3>分享歌单《' + esc(sh.name) + '》</h3><p style="font-size:12px;color:var(--muted);margin-bottom:8px;"><b>1. 生成云端链接</b>（可发给好友网页听歌，也可粘贴到 <b>MusicFree 导入歌单</b>）</p><div style="display:flex;gap:8px;margin-bottom:12px;"><input id="cloudShareOut" readonly placeholder="点击右侧按钮生成链接..." style="margin:0;flex:1;" /><button class="btn" onclick="genCloudShare()">生成并复制</button></div><p style="font-size:12px;color:var(--muted);margin-bottom:6px;"><b>2. 导出文本清单</b>（兼容网易云“一键导入外部歌单”、QQ音乐、洛雪等）</p><textarea rows="5" readonly>' + esc(txtList) + '</textarea><div class="modal-row"><button class="btn ghost" onclick="copyVar(window._shareTxt, \\'文本清单已复制\\')">复制文本清单</button><button class="btn ghost" onclick="copyVar(window._shareJson, \\'JSON 已复制\\')">复制 JSON</button><button class="btn" onclick="closeModal()">完成</button></div>');
 }
 function genCloudShare() {
   var sh = mySheets[window._shareIdx]; if (!sh) return;
-  api("/api/share", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: sh.name, description: sh.desc || "", songs: sh.songs }) })
-    .then(function(d) {
-      if (!d.ok) return toast(d.error || "生成失败");
-      var inp = document.getElementById("cloudShareOut"); if (inp) inp.value = d.shareUrl;
-      copyVar(d.shareUrl, "云端分享链接已复制（可直接贴进 MusicFree 导入）");
-    }).catch(function() { toast("生成失败"); });
+  api("/api/share", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: sh.name, description: sh.desc || "", songs: sh.songs }) }).then(function(d) {
+    if (!d.ok) return toast(d.error || "生成失败");
+    var inp = document.getElementById("cloudShareOut"); if (inp) inp.value = d.shareUrl;
+    copyVar(d.shareUrl, "云端分享链接已复制（可直接贴进 MusicFree 导入）");
+  }).catch(function() { toast("生成失败"); });
 }
-function copyVar(str, okMsg) {
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(str).then(function() { toast(okMsg); }).catch(function() { toast("请手动全选复制"); });
-  } else { toast("请手动全选复制"); }
-}
-
+function copyVar(str, okMsg) { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(str).then(function() { toast(okMsg); }).catch(function() { toast("请手动全选复制"); }); else toast("请手动全选复制"); }
 function loadSharedPlaylist(shareId) {
-  setNav("sheets");
-  document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">正在加载分享歌单...</div>';
+  setNav("sheets"); document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">正在加载分享歌单...</div>';
   api("/api/share?id=" + encodeURIComponent(shareId)).then(function(d) {
     if (!d.songs) return toast(d.error || "分享歌单不存在");
     lastSharedData = d; viewSongs = d.songs;
     var cov = (viewSongs[0] && viewSongs[0].cover) ? thumb(viewSongs[0].cover, 240) : DEFAULT_COV;
-    var h = '<div class="list-head">' + (cov !== DEFAULT_COV ? '<img class="list-cov" referrerpolicy="no-referrer" src="' + esc(cov) + '" />' : '<div class="list-cov">' + esc(d.title.slice(0, 1)) + '</div>') +
-      '<div style="flex:1;min-width:160px;"><div style="font-size:19px;font-weight:800;">' + esc(d.title) + '</div>' +
-      '<div style="font-size:12px;color:var(--muted);margin:4px 0 10px;">' + esc(d.description || "好友分享歌单") + ' · ' + viewSongs.length + ' 首</div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="radioMode=\\'\\';playAll()">&#9654; 播放全部</button><button class="btn ghost" onclick="saveSharedToMine()">📥 保存到我的歌单</button><button class="btn ghost" onclick="nav(\\'discover\\')">首页</button></div></div></div>';
+    var h = '<div class="list-head">' + (cov !== DEFAULT_COV ? '<img class="list-cov" referrerpolicy="no-referrer" src="' + esc(cov) + '" />' : '<div class="list-cov">' + esc(d.title.slice(0, 1)) + '</div>') + '<div style="flex:1;min-width:160px;"><div style="font-size:19px;font-weight:800;">' + esc(d.title) + '</div><div style="font-size:12px;color:var(--muted);margin:4px 0 10px;">' + esc(d.description || "好友分享歌单") + ' · ' + viewSongs.length + ' 首</div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="radioMode=\\'\\';playAll()">&#9654; 播放全部</button><button class="btn ghost" onclick="saveSharedToMine()">📥 保存到我的歌单</button><button class="btn ghost" onclick="nav(\\'discover\\')">首页</button></div></div></div>';
     document.getElementById("leftPane").innerHTML = h + buildSongsRowsHtml(viewSongs, false, "");
   }).catch(function(){});
 }
-function saveSharedToMine() {
-  if (!lastSharedData) return;
-  mySheets.unshift({ id: "pl_" + Date.now(), name: lastSharedData.title || "收藏分享歌单", desc: "来自好友分享", createdAt: Date.now(), songs: lastSharedData.songs || [] });
-  saveSheets(); toast("已保存到我的歌单！");
-}
+function saveSharedToMine() { if (!lastSharedData) return; mySheets.unshift({ id: "pl_" + Date.now(), name: lastSharedData.title || "收藏分享歌单", desc: "来自好友分享", createdAt: Date.now(), songs: lastSharedData.songs || [] }); saveSheets(); toast("已保存到我的歌单！"); }
 
 // -------- 队列与通用列表渲染 --------
 function renderQueueView() {
@@ -1134,81 +942,45 @@ function renderQueueView() {
 }
 function removeFromQueue(idx) {
   if (idx < 0 || idx >= playQueue.length) return;
-  playQueue.splice(idx, 1);
-  if (idx < curIdx) curIdx--;
-  else if (idx === curIdx) curIdx = Math.min(curIdx, playQueue.length - 1);
+  playQueue.splice(idx, 1); if (idx < curIdx) curIdx--; else if (idx === curIdx) curIdx = Math.min(curIdx, playQueue.length - 1);
   renderQueueView();
 }
-
 function renderSongList(title, sub, cover, songs, hasMore, allowCollect) {
-  viewSongs = songs || [];
-  window._curListTitle = title;
+  viewSongs = songs || []; window._curListTitle = title;
   var cov = thumb(cover, 240);
   var backLabel = backTarget === "artist" ? ("← 返回 " + pageState.artistName) : backTarget === "albums" ? "← 返回专辑" : backTarget === "artists" ? "← 返回歌手" : backTarget === "sheets" ? "← 返回歌单" : "返回发现";
   var collectBtn = allowCollect ? '<button class="btn ghost" onclick="saveCurrentListAsSheet(window._curListTitle)">📥 存为歌单</button>' : '';
-  var h = '<div class="list-head">' + (cov !== DEFAULT_COV ? '<img class="list-cov" referrerpolicy="no-referrer" src="' + esc(cov) + '" />' : '<div class="list-cov">' + esc(title.slice(0, 1)) + '</div>') +
-    '<div style="flex:1;min-width:160px;"><div style="font-size:19px;font-weight:800;">' + esc(title) + '</div><div style="font-size:12px;color:var(--muted);margin:4px 0 10px;">' + esc(sub) + '</div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="radioMode=\\'\\';playAll()">&#9654; 播放全部</button>' + collectBtn + '<button class="btn ghost" onclick="goBack()">' + esc(backLabel) + '</button></div></div></div>';
+  var h = '<div class="list-head">' + (cov !== DEFAULT_COV ? '<img class="list-cov" referrerpolicy="no-referrer" src="' + esc(cov) + '" />' : '<div class="list-cov">' + esc(title.slice(0, 1)) + '</div>') + '<div style="flex:1;min-width:160px;"><div style="font-size:19px;font-weight:800;">' + esc(title) + '</div><div style="font-size:12px;color:var(--muted);margin:4px 0 10px;">' + esc(sub) + '</div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" onclick="radioMode=\\'\\';playAll()">&#9654; 播放全部</button>' + collectBtn + '<button class="btn ghost" onclick="goBack()">' + esc(backLabel) + '</button></div></div></div>';
   document.getElementById("leftPane").innerHTML = h + buildSongsRowsHtml(viewSongs, hasMore, "");
 }
-
 function buildSongsRowsHtml(songs, hasMore, ctxMode) {
   if (!songs.length) return '<div style="padding:36px;text-align:center;color:var(--muted);">暂无歌曲</div>';
   var h = "";
   for (var i = 0; i < songs.length; i++) {
     var s = songs[i], isCur = curSong && curSong.norm_key === s.norm_key, loved = isFav(s);
-    var extraBtn = "";
-    if (ctxMode && ctxMode.indexOf("sheet:") === 0) {
-      var sIdx = Number(ctxMode.split(":")[1]);
-      extraBtn = '<button class="ico-btn" title="从歌单移除" onclick="removeFromSheet(' + sIdx + ',' + i + ')">✕</button>';
-    } else if (ctxMode === "queue") {
-      extraBtn = '<button class="ico-btn" title="移出队列" onclick="removeFromQueue(' + i + ')">✕</button>';
-    } else {
-      extraBtn = '<button class="ico-btn" title="加到歌单" onclick="addViewToSheet(' + i + ')">📁</button>';
-    }
-    h += '<div class="s-row' + (isCur ? " active" : "") + '" data-nk="' + esc(s.norm_key) + '" onclick="playViewIdx(' + i + ')">' +
-      '<div class="s-num">' + (isCur ? "&#9654;" : (i + 1)) + '</div>' +
-      '<img class="s-cov" loading="lazy" referrerpolicy="no-referrer" src="' + esc(thumb(s.cover, 100)) + '" />' +
-      '<div class="s-main"><div class="s-t">' + esc(s.title) + '</div><div class="s-a">' + esc(s.artist) + (s.album ? " · " + esc(s.album) : "") + '</div></div>' +
-      '<div class="s-d">' + (s.duration ? fmt(s.duration) : "--:--") + '</div>' +
-      '<div class="s-acts" onclick="event.stopPropagation()">' +
-      '<button class="ico-btn' + (loved ? " loved" : "") + '" title="红心收藏" onclick="toggleViewFav(' + i + ',this)">' + (loved ? "&#9829;" : "&#9825;") + '</button>' +
-      extraBtn +
-      '<button class="ico-btn" title="下载到本地" onclick="downloadViewIdx(' + i + ')">⬇</button>' +
-      '<button class="ico-btn" title="下一首播放" onclick="addNext(' + i + ')">+</button>' +
-      '</div></div>';
+    var extraBtn = (ctxMode && ctxMode.indexOf("sheet:") === 0) ? '<button class="ico-btn" title="从歌单移除" onclick="removeFromSheet(' + Number(ctxMode.split(":")[1]) + ',' + i + ')">✕</button>' : (ctxMode === "queue" ? '<button class="ico-btn" title="移出队列" onclick="removeFromQueue(' + i + ')">✕</button>' : '<button class="ico-btn" title="加到歌单" onclick="addViewToSheet(' + i + ')">📁</button>');
+    h += '<div class="s-row' + (isCur ? " active" : "") + '" data-nk="' + esc(s.norm_key) + '" onclick="playViewIdx(' + i + ')"><div class="s-num">' + (isCur ? "&#9654;" : (i + 1)) + '</div><img class="s-cov" loading="lazy" referrerpolicy="no-referrer" src="' + esc(thumb(s.cover, 100)) + '" /><div class="s-main"><div class="s-t">' + esc(s.title) + '</div><div class="s-a">' + esc(s.artist) + (s.album ? " · " + esc(s.album) : "") + '</div></div><div class="s-d">' + (s.duration ? fmt(s.duration) : "--:--") + '</div><div class="s-acts" onclick="event.stopPropagation()"><button class="ico-btn' + (loved ? " loved" : "") + '" title="红心收藏" onclick="toggleViewFav(' + i + ',this)">' + (loved ? "&#9829;" : "&#9825;") + '</button>' + extraBtn + '<button class="ico-btn" title="下载到本地" onclick="downloadViewIdx(' + i + ')">⬇</button><button class="ico-btn" title="下一首播放" onclick="addNext(' + i + ')">+</button></div></div>';
   }
   if (hasMore) h += '<div style="text-align:center;padding:16px;"><button class="btn ghost" onclick="loadMore()">加载更多歌曲 &darr;</button></div>';
   return h;
 }
-
 function syncActiveRowHighlight() {
   var rows = document.querySelectorAll("#leftPane .s-row");
   for (var i = 0; i < rows.length; i++) {
-    var nk = rows[i].getAttribute("data-nk");
-    var isCur = curSong && nk === curSong.norm_key;
+    var nk = rows[i].getAttribute("data-nk"), isCur = curSong && nk === curSong.norm_key;
     rows[i].classList.toggle("active", Boolean(isCur));
     var numEl = rows[i].querySelector(".s-num");
     if (numEl) numEl.innerHTML = isCur ? "&#9654;" : String(i + 1);
   }
 }
-
 function playAll() { if (viewSongs.length) { playQueue = viewSongs.slice(); playQueueIdx(0); } }
-function playViewIdx(i) {
-  if (curTabName !== "radio") radioMode = "";
-  updateDislikeBtn();
-  playQueue = viewSongs.slice(); playQueueIdx(i);
-}
-function addNext(i) {
-  var s = viewSongs[i]; if (!s) return;
-  if (!playQueue.length) { playQueue = [s]; playQueueIdx(0); return; }
-  playQueue.splice(curIdx + 1, 0, s);
-  toast("已添加到下一首播放");
-}
+function playViewIdx(i) { if (curTabName !== "radio") radioMode = ""; updateDislikeBtn(); playQueue = viewSongs.slice(); playQueueIdx(i); }
+function addNext(i) { var s = viewSongs[i]; if (!s) return; if (!playQueue.length) { playQueue = [s]; playQueueIdx(0); return; } playQueue.splice(curIdx + 1, 0, s); toast("已添加到下一首播放"); }
 
-// -------- 播放与多源竞速引擎 --------
+// -------- 播放与本地三路直连竞速（严格原版打分 + 72%时长防短版） --------
 function renderSrcBar() {
   var bar = document.getElementById("srcBar");
-  if (!candidates.length) { bar.innerHTML = '<span style="font-size:11px;color:var(--muted);">正在并发探测全网可用音源...</span>'; return; }
+  if (!candidates.length) { bar.innerHTML = '<span style="font-size:11px;color:var(--muted);">正在并发探测全网正式音源...</span>'; return; }
   bar.innerHTML = candidates.map(function(c, i) {
     var cls = i === curCandIdx ? "src-item cur" : (c.isTrial ? "src-item warn" : "src-item ok");
     return '<button class="' + cls + '" onclick="pickCandidate(' + i + ',true)">' + esc(c.label) + '</button>';
@@ -1237,7 +1009,7 @@ function pickCandidate(i, manual) {
 
 function fetchDirectGD(s, plat, label, seq) {
   var cleanArtist = (s.artist || "").split(/[/,、&]/)[0].trim();
-  var kw = (s.title + " " + cleanArtist).replace(/[()\\[\\]（）【】]/g, " ").trim();
+  var kw = (normStrLocal(s.title) + " " + cleanArtist).trim();
   var base = "https://music-api.gdstudio.xyz/api.php?use_xbridge3=true&types=";
   var p = (plat === "netease" && s.ext_source === "netease" && s.ext_id)
     ? Promise.resolve(s.ext_id)
@@ -1245,8 +1017,12 @@ function fetchDirectGD(s, plat, label, seq) {
         .then(function(r) { return r.json(); })
         .then(function(arr) {
           if (!Array.isArray(arr) || !arr.length) return "";
-          var picked = arr.find(function(x) { return !isJunkLocal(x.name, s.title); }) || arr[0];
-          return (picked && picked.id) ? String(picked.id) : "";
+          var best = null, bsc = -100;
+          for (var i = 0; i < arr.length; i++) {
+            var sc = scoreMatchLocal(arr[i].name, arr[i].artist, s.title, s.artist, 0, s.duration);
+            if (sc > bsc) { bsc = sc; best = arr[i]; }
+          }
+          return (best && bsc > -60 && best.id) ? String(best.id) : "";
         });
 
   p.then(function(pid) {
@@ -1255,10 +1031,24 @@ function fetchDirectGD(s, plat, label, seq) {
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (!d || !d.url || seq !== playSeq) return;
-        if (d.size && s.duration >= 90 && Number(d.size) < 1300) return;
+        if (d.size && s.duration >= 90 && Number(d.size) < Math.max(1300, s.duration * 11)) return;
         addCandidate(seq, { label: label + (d.br ? "(" + d.br + "k)" : ""), url: d.url, isTrial: false });
       });
   }).catch(function(){});
+}
+
+function fetchDirectVKeys(s, seq) {
+  var cleanArtist = (s.artist || "").split(/[/,、&]/)[0].trim();
+  var kw = (normStrLocal(s.title) + " " + cleanArtist).trim();
+  fetch("https://api.vkeys.cn/v2/music/tencent?word=" + encodeURIComponent(kw) + "&n=1&quality=3")
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      if (seq !== playSeq) return;
+      var d = res && res.data;
+      if (!d || !d.url) return;
+      if (scoreMatchLocal(d.song || s.title, d.singer || s.artist, s.title, s.artist, 0, s.duration) <= -60) return;
+      addCandidate(seq, { label: "QQ(直连)", url: d.url, isTrial: false });
+    }).catch(function(){});
 }
 
 function recordHistory(s) {
@@ -1275,12 +1065,11 @@ function playQueueIdx(idx) {
   playSeq++; var seq = playSeq; candidates = []; curCandIdx = -1; autoWaitMeta = false; cloudDone = false;
   audio.pause(); audio.removeAttribute("src"); audio.load(); setPlayIcon(false);
 
-  recordHistory(s);
-  updateDislikeBtn();
+  recordHistory(s); updateDislikeBtn();
   if (radioMode && idx >= playQueue.length - 2) fetchRadioBatch(radioMode, true);
 
   document.getElementById("dTitle").textContent = s.title;
-  document.getElementById("dArtist").textContent = s.artist + " · 多源并发连接中...";
+  document.getElementById("dArtist").textContent = s.artist + " · 本地多源匹配中...";
   document.getElementById("sTitle").textContent = s.title;
   document.getElementById("sArtist").textContent = s.artist;
   var bigCov = thumb(s.cover, 400);
@@ -1289,8 +1078,8 @@ function playQueueIdx(idx) {
   document.getElementById("stageBlur").style.backgroundImage = s.cover ? ('url("' + bigCov.replace(/"/g, '\\"') + '")') : "none";
   updateFavBtn(); renderSrcBar(); syncActiveRowHighlight();
 
+  fetchDirectVKeys(s, seq);
   fetchDirectGD(s, "kuwo", "酷我(直连)", seq);
-  fetchDirectGD(s, "kugou", "酷狗(直连)", seq);
   fetchDirectGD(s, "joox", "JOOX(直连)", seq);
   fetchDirectGD(s, "netease", "网易(直连)", seq);
 
@@ -1306,7 +1095,7 @@ function playQueueIdx(idx) {
       document.getElementById("dArtist").textContent = s.artist + " · 暂无可用完整源";
     } else if (candidates.every(function(x) { return x.isTrial; }) && candidates[0]) {
       pickCandidate(0, true);
-      toast("该曲暂无完整版权源，已为您播放试听版");
+      toast("该曲暂无完整版，已播放可用短版/试听");
     }
   }).catch(function() { cloudDone = true; });
 
@@ -1318,70 +1107,56 @@ function playQueueIdx(idx) {
 
 audio.addEventListener("loadedmetadata", function() {
   var c = candidates[curCandIdx];
-  if (autoWaitMeta && curSong && curSong.duration >= 90 && audio.duration > 0 && audio.duration <= 45 && c) {
+  var isShort = curSong && curSong.duration >= 90 && audio.duration > 0 && (audio.duration <= 65 || audio.duration < curSong.duration * 0.72);
+  if (autoWaitMeta && isShort && c) {
     c.isTrial = true;
-    if (c.label.indexOf("[试听]") < 0) c.label += "[试听]";
+    var tag = audio.duration <= 65 ? "[试听]" : "[短版]";
+    if (c.label.indexOf("[试听]") < 0 && c.label.indexOf("[短版]") < 0) c.label += tag;
     renderSrcBar();
     for (var i = 0; i < candidates.length; i++) { if (!candidates[i].isTrial) { pickCandidate(i, false); return; } }
     if (cloudDone) {
-      autoWaitMeta = false;
-      audio.play().catch(function(){}); setPlayIcon(true);
-      toast("全网仅剩试听片段");
+      autoWaitMeta = false; audio.play().catch(function(){}); setPlayIcon(true);
+      toast("全网仅匹配到短版/试听片段");
     }
     return;
   }
   if (autoWaitMeta && c) {
-    autoWaitMeta = false;
-    audio.play().catch(function(){}); setPlayIcon(true);
+    autoWaitMeta = false; audio.play().catch(function(){}); setPlayIcon(true);
     document.getElementById("dArtist").textContent = (curSong ? curSong.artist : "") + " · " + c.label;
   }
 });
-audio.addEventListener("error", function() {
-  if (curCandIdx >= 0 && curCandIdx + 1 < candidates.length) pickCandidate(curCandIdx + 1, false);
-});
-audio.addEventListener("waiting", function() {
-  if (curSong) document.getElementById("dArtist").textContent = curSong.artist + " · 缓冲中...";
-});
-audio.addEventListener("playing", function() {
-  var c = candidates[curCandIdx];
-  if (curSong && c) document.getElementById("dArtist").textContent = curSong.artist + " · " + c.label;
-});
+audio.addEventListener("error", function() { if (curCandIdx >= 0 && curCandIdx + 1 < candidates.length) pickCandidate(curCandIdx + 1, false); });
+audio.addEventListener("waiting", function() { if (curSong) document.getElementById("dArtist").textContent = curSong.artist + " · 缓冲中..."; });
+audio.addEventListener("playing", function() { var c = candidates[curCandIdx]; if (curSong && c) document.getElementById("dArtist").textContent = curSong.artist + " · " + c.label; });
 
-function setPlayIcon(p) { var i = p ? "&#10074;&#10074;" : "&#9654;"; document.getElementById("playFab").innerHTML = i; document.getElementById("playFabM").innerHTML = i; }
+function setPlayIcon(p) {
+  var i = p ? "&#10074;&#10074;" : "&#9654;";
+  ["playFab", "playFabM", "playFabS"].forEach(function(id) { var el = document.getElementById(id); if (el) el.innerHTML = i; });
+}
 function togglePlay() { if (!audio.src) return; if (audio.paused) { audio.play(); setPlayIcon(true); } else { audio.pause(); setPlayIcon(false); } }
 function toggleMode() {
   playMode = playMode === "loop" ? "one" : playMode === "one" ? "shuffle" : "loop";
-  localStorage.setItem("mh_mode", playMode);
-  document.getElementById("modeBtn").textContent = playMode === "one" ? "单曲" : playMode === "shuffle" ? "随机" : "顺序";
+  localStorage.setItem("mh_mode", playMode); syncModeBtns();
   toast("播放模式：" + document.getElementById("modeBtn").textContent);
 }
 function prevSong() { if (playQueue.length) playQueueIdx(curIdx > 0 ? curIdx - 1 : playQueue.length - 1); }
 function nextSong() {
   if (!playQueue.length) return;
   if (playMode === "one") { audio.currentTime = 0; audio.play(); return; }
-  if (playMode === "shuffle" && playQueue.length > 1) {
-    var nxt = curIdx;
-    while (nxt === curIdx) nxt = Math.floor(Math.random() * playQueue.length);
-    playQueueIdx(nxt); return;
-  }
+  if (playMode === "shuffle" && playQueue.length > 1) { var nxt = curIdx; while (nxt === curIdx) nxt = Math.floor(Math.random() * playQueue.length); playQueueIdx(nxt); return; }
   playQueueIdx((curIdx + 1) % playQueue.length);
 }
 function seekPct(v) { if (audio.duration) audio.currentTime = (v / 100) * audio.duration; }
-function setVolume(v) {
-  audio.volume = Number(v); audio.muted = false;
-  localStorage.setItem("mh_vol", String(audio.volume));
-  document.getElementById("muteBtn").textContent = audio.volume === 0 ? "🔇" : "🔊";
-}
+function setVolume(v) { audio.volume = Number(v); audio.muted = false; localStorage.setItem("mh_vol", String(audio.volume)); document.getElementById("muteBtn").textContent = audio.volume === 0 ? "🔇" : "🔊"; }
 function toggleMute() { audio.muted = !audio.muted; document.getElementById("muteBtn").textContent = audio.muted ? "🔇" : "🔊"; }
 
-audio.addEventListener("ended", function() {
-  if (stopAfterCurrent) { stopAfterCurrent = false; setPlayIcon(false); toast("本首播完，已定时停止"); return; }
-  nextSong();
-});
+audio.addEventListener("ended", function() { if (stopAfterCurrent) { stopAfterCurrent = false; setPlayIcon(false); toast("本首播完，已定时停止"); return; } nextSong(); });
 audio.addEventListener("timeupdate", function() {
-  var c = audio.currentTime || 0, d = audio.duration || 0;
-  document.getElementById("curT").textContent = fmt(c); document.getElementById("durT").textContent = fmt(d);
-  if (d > 0) document.getElementById("seek").value = (c / d) * 100;
+  var c = audio.currentTime || 0, d = audio.duration || 0, ct = fmt(c), dt = fmt(d), pct = d > 0 ? ((c / d) * 100) : 0;
+  document.getElementById("curT").textContent = ct; document.getElementById("durT").textContent = dt;
+  document.getElementById("mCurT").textContent = ct; document.getElementById("mDurT").textContent = dt;
+  document.getElementById("seek").value = pct; document.getElementById("mSeek").value = pct;
+  var mf = document.getElementById("dockMiniFill"); if (mf) mf.style.width = pct.toFixed(2) + "%";
   highlightLrc(c);
 });
 
@@ -1407,9 +1182,7 @@ function updateFavBtn() { var l = isFav(curSong), el = document.getElementById("
 
 // -------- 歌词解析与安全滚动 --------
 var lrcEl = document.getElementById("lrcBox");
-["wheel", "touchstart"].forEach(function(ev) {
-  lrcEl.addEventListener(ev, function() { userLrcScrollUntil = Date.now() + 3500; }, { passive: true });
-});
+["wheel", "touchstart"].forEach(function(ev) { lrcEl.addEventListener(ev, function() { userLrcScrollUntil = Date.now() + 3500; }, { passive: true }); });
 function parseLrc(raw, transRaw) {
   lrcRows = []; var transMap = {};
   (transRaw || "").split(/\\r?\\n/).forEach(function(line) { var m = line.match(/\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)/); if (m) transMap[Math.round((Number(m[1]) * 60 + Number(m[2])) * 10)] = m[3].trim(); });
@@ -1439,12 +1212,7 @@ function highlightLrc(sec) {
 
 // -------- 睡眠定时弹窗 & 全局快捷键 --------
 function openTimer() {
-  openModal('<h3>睡眠定时关闭</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">' +
-    '<button class="btn ghost" onclick="setSleepMin(15)">15 分钟后</button>' +
-    '<button class="btn ghost" onclick="setSleepMin(30)">30 分钟后</button>' +
-    '<button class="btn ghost" onclick="setSleepMin(60)">60 分钟后</button>' +
-    '<button class="btn ghost" onclick="stopAfterCurrent=true;clearTimeout(timerId);closeModal();toast(\\'将在本首播放结束后停止\\')">播完当前单曲</button>' +
-    '</div><div class="modal-row"><button class="btn danger" onclick="clearTimeout(timerId);stopAfterCurrent=false;closeModal();toast(\\'已取消定时\\')">取消定时</button><button class="btn" onclick="closeModal()">关闭</button></div>');
+  openModal('<h3>睡眠定时关闭</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;"><button class="btn ghost" onclick="setSleepMin(15)">15 分钟后</button><button class="btn ghost" onclick="setSleepMin(30)">30 分钟后</button><button class="btn ghost" onclick="setSleepMin(60)">60 分钟后</button><button class="btn ghost" onclick="stopAfterCurrent=true;clearTimeout(timerId);closeModal();toast(\\'将在本首播放结束后停止\\')">播完当前单曲</button></div><div class="modal-row"><button class="btn danger" onclick="clearTimeout(timerId);stopAfterCurrent=false;closeModal();toast(\\'已取消定时\\')">取消定时</button><button class="btn" onclick="closeModal()">关闭</button></div>');
 }
 function setSleepMin(mins) {
   clearTimeout(timerId); stopAfterCurrent = false;
@@ -1464,7 +1232,6 @@ document.addEventListener("keydown", function(e) {
   else if (e.key === "m" || e.key === "M") { toggleMute(); }
 });
 
-// -------- 启动路由检测 --------
 var initShare = new URLSearchParams(location.search).get("share");
 if (initShare) loadSharedPlaylist(initShare);
 else nav("discover");
