@@ -950,15 +950,28 @@ export default {
         if (path === "/api/admin/source/test" && request.method === "POST") {
           const src = await env.DB.prepare("SELECT * FROM sources WHERE id = ?").bind((await request.json()).id).first();
           if (!src) return json({ error: "not found" }, 404);
-          const t0 = Date.now(); let testUrl = src.endpoint;
-          if (src.type === "agg") testUrl = `${src.endpoint}?use_xbridge3=true&types=search&source=kuwo&name=晴天&count=1&pages=1`;
-          if (src.type === "native") testUrl = `${src.endpoint}/albums`;
-          if (src.type === "vkeys") testUrl = `https://api.vkeys.cn/v2/music/tencent?word=晴天&n=1&quality=3`;
-          try { const r = await fetchTimeout(testUrl, { headers: { "User-Agent": UA, Referer: "https://music.gdstudio.xyz/" } }, 4500); return json({ ok: r.ok, status: r.status, ms: Date.now() - t0 }); }
-          catch (e) { return json({ ok: false, error: e.message, ms: Date.now() - t0 }); }
+          const t0 = Date.now();
+          let testUrl = src.endpoint;
+          const hdrs = { "User-Agent": UA, Accept: "application/json" };
+          if (src.type === "agg") {
+            testUrl = `${src.endpoint}?use_xbridge3=true&types=search&source=kuwo&name=${encodeURIComponent("晴天")}&count=5&pages=1`;
+            hdrs.Referer = "https://music.gdstudio.xyz/";
+            hdrs.Origin = "https://music.gdstudio.xyz";
+          } else if (src.type === "native") {
+            testUrl = `${src.endpoint}/albums`;
+          } else if (src.type === "vkeys") {
+            testUrl = `https://api.vkeys.cn/v2/music/tencent?word=${encodeURIComponent("晴天")}&n=1&quality=3`;
+          } else if (src.type === "bili") {
+            testUrl = `${src.endpoint.replace(/\/$/, "")}/x/frontend/finger/spi`;
+            hdrs.Referer = "https://www.bilibili.com/";
+          }
+          try {
+            const r = await fetchTimeout(testUrl, { headers: hdrs }, 4500);
+            return json({ ok: r.ok, status: r.status, ms: Date.now() - t0 });
+          } catch (e) {
+            return json({ ok: false, error: e.message, ms: Date.now() - t0 });
+          }
         }
-        return json({ error: "Unknown admin route" }, 404);
-      }
 
       if (path === "/api/stream") {
         if (!(checkToken(request, env, pathToken) || (await checkAdmin(request, env)))) return json({ error: "Unauthorized" }, 401);
