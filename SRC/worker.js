@@ -75,6 +75,33 @@ let runtimeCfgCache = { ts: 0, junkWords: DEFAULT_JUNK_WORDS, sources: [], subMo
 let biliAuthCache = { buvid3: "", buvid4: "", imgKey: "", subKey: "", ts: 0 };
 const loginFailMap = new Map();
 
+const LYRIC_CACHE_TTL_DAYS = 20;      // 超过 30 天未使用的歌词缓存自动清理（改为 0 可关闭）
+const LYRIC_GC_INTERVAL_SEC = 86400;  // 每 24 小时最多执行一次清理
+let lyricGcLastCheckMs = 0;
+
+async function maybeCleanupExpiredLyrics(env) {
+  if (LYRIC_CACHE_TTL_DAYS <= 0) return;
+  const nowMs = Date.now();
+  if (nowMs - lyricGcLastCheckMs < LYRIC_GC_INTERVAL_SEC * 1000) return;
+  lyricGcLastCheckMs = nowMs;
+
+  const nowSec = Math.floor(nowMs / 1000);
+  try {
+    const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'last_lyric_gc_at'").first();
+    const lastGc = Number(row?.value || 0);
+    if (nowSec - lastGc < LYRIC_GC_INTERVAL_SEC) return;
+
+    await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('last_lyric_gc_at', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind(String(nowSec)).run();
+
+    const cutoff = nowSec - LYRIC_CACHE_TTL_DAYS * 86400;
+    await env.DB.prepare(
+      "UPDATE songs SET lyric_lrc = '', lyric_trans = '' " +
+      "WHERE id IN (SELECT id FROM songs WHERE (length(lyric_lrc) > 0 OR length(lyric_trans) > 0) AND updated_at < ? LIMIT 500)"
+    ).bind(cutoff).run();
+  } catch {}
+}
+
 function parseSourceStats(raw) {
   try {
     const obj = JSON.parse(raw || "{}");
@@ -2643,7 +2670,15 @@ export default {
           if (song) id = song.id;
         }
         if (song) {
-          if (song.lyric_lrc && song.lyric_lrc.trim().length > 10) return json({ song: { ...song, cover: httpsCover(song.cover), lyric_source: "d1_cache" } });
+          if (song) {
+          const nowSec = Math.floor(Date.now() / 1000);
+          ctx.waitUntil(maybeCleanupExpiredLyrics(env));
+          if (song.lyric_lrc && song.lyric_lrc.trim().length > 10) {
+            if (nowSec - Number(song.updated_at || 0) >= 86400) {
+              ctx.waitUntil(env.DB.prepare("UPDATE songs SET updated_at = ? WHERE id = ?").bind(nowSec, song.id).run().catch(() => {}));
+            }
+            return json({ song: { ...song, cover: httpsCover(song.cover), lyric_source: "d1_cache" } });
+          }
           const ids = JSON.parse(song.source_ids_json || "{}");
           if (["netease", "msr", "migu", "kuwo"].includes(extSrc) && extId && !ids[extSrc]) ids[extSrc] = extId;
           const live = await fetchLiveLyric(extSrc || (ids.netease ? "netease" : ids.msr ? "msr" : ""), extId || ids.netease || ids.msr || "", song.title || title, song.artist || artist, song.duration || Number(url.searchParams.get("duration") || 0), ids);
