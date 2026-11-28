@@ -200,7 +200,6 @@ function loadAll() {
   }).catch(function(){});
 }
 
-// -------- 订阅源、模式切换、二维码与本地文件下载 --------
 function makeQrHtml(text) {
   try {
     if (typeof qrcode === "function") {
@@ -271,7 +270,7 @@ function renderSubsTab() {
     '<div><h3 style="margin-bottom:4px;">订阅源融合模式配置（作用于 musicfree.json）</h3><p style="font-size:12px;color:var(--muted);margin:0;">所有自建插件均支持国内手机本地并发直连，减少绕道海外节点的卡顿。</p></div>' +
     '<div class="row" style="margin:0;"><select id="subModeSel">' +
     '<option value="pure"' + (mode === "pure" ? " selected" : "") + '>纯净自建版（4个全自建插件，绝对稳）</option>' +
-    '<option value="fusion"' + (mode === "fusion" ? " selected" : "") + '>强力融合版（自建4插件 + 歌曲宝/种子/爱听/5sing，推荐）</option>' +
+    '<option value="fusion"' + (mode === "fusion" ? " selected" : "") + '>强力融合版（自建4插件 + 种子/爱听/5sing，推荐）</option>' +
     '<option value="turbo"' + (mode === "turbo" ? " selected" : "") + '>全量涡轮版（强力融合 + 元力网易/QQ/酷我）</option>' +
     '</select><button onclick="saveSubMode()">保存模式</button></div></div></div>';
 
@@ -288,13 +287,24 @@ function renderSubsTab() {
   document.getElementById("main").innerHTML = h;
 }
 
+function togglePlayerDebug() {
+  var next = !dashData.playerDebug;
+  req("/api/admin/settings", { method: "POST", body: JSON.stringify({ playerDebug: next }) }).then(function() {
+    dashData.playerDebug = next;
+    renderOverview();
+    toast(next ? "已开启全站播放器 🐛 调试窗口入口" : "已隐藏全站播放器调试入口");
+  });
+}
+
 function renderOverview() {
   var st = dashData.stats || {}, pct = st.songs ? Math.round((st.lyrics / st.songs) * 100) : 0;
   var sc = dashData.syncConfig || { enabled: true, lrcLimit: 450, chartMax: 120, lastSyncAt: 0, lastSyncSummary: "暂无同步记录" };
   var lastTimeStr = sc.lastSyncAt ? new Date(sc.lastSyncAt * 1000).toLocaleString("zh-CN") : "尚未运行";
+  var dbgOn = Boolean(dashData.playerDebug);
 
-  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><h3>曲库概览</h3><button class="sm green" onclick="switchTab(\\'subs\\')">查看订阅源 / 切换融合模式</button></div>' +
-    '<div class="grid"><div class="stat"><b>' + (st.songs||0) + '</b><span>可用歌曲</span></div><div class="stat"><b>' + (st.charts||0) + '</b><span>精选榜单</span></div><div class="stat"><b>' + (st.lyrics||0) + ' (' + pct + '%)</b><span>歌词覆盖率</span></div><div class="stat"><b>' + (st.blocked||0) + '</b><span>已屏蔽</span></div></div><div style="margin-top:14px;">' + (dashData.categories || []).map(function(c) { return '<span class="badge">' + esc(c.category) + ': ' + c.c + '首</span>'; }).join("") + '</div></div>';
+  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;"><h3>曲库概览</h3><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="sm ' + (dbgOn ? "red" : "ghost") + '" onclick="togglePlayerDebug()">' + (dbgOn ? "🐛 调试窗口：已开启（点此隐藏）" : "🐛 开启播放器调试窗口") + '</button><button class="sm green" onclick="switchTab(\\'subs\\')">查看订阅源 / 切换融合模式</button></div></div>' +
+    '<div class="grid"><div class="stat"><b>' + (st.songs||0) + '</b><span>可用歌曲</span></div><div class="stat"><b>' + (st.charts||0) + '</b><span>精选榜单</span></div><div class="stat"><b>' + (st.lyrics||0) + ' (' + pct + '%)</b><span>歌词覆盖率</span></div><div class="stat"><b>' + (st.blocked||0) + '</b><span>已屏蔽</span></div></div><div style="margin-top:14px;">' + (dashData.categories || []).map(function(c) { return '<span class="badge">' + esc(c.category) + ': ' + c.c + '首</span>'; }).join("") + '</div>' +
+    '<div class="tip-box">🐛 <b>调试窗口说明：</b>开启后，播放器顶部会显示「调试」按钮，可实时查看每首歌直连与云端各源请求路径、耗时、试听拦截及歌手/搜索接口详情；调试完成后点击上方按钮即可一键隐藏。</div></div>';
 
   var srcs = dashData.sources || [];
   h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><h3>云端音源解析池</h3><button class="sm" onclick="testAllSrc()">一键全员测活</button></div><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>名称 / 地址</th><th>类型</th><th>优先级</th><th>状态</th><th>测活结果</th><th>操作</th></tr></thead><tbody>';
@@ -302,20 +312,20 @@ function renderOverview() {
     var s = srcs[i];
     h += '<tr><td>' + esc(s.id) + '</td><td><b>' + esc(s.name) + '</b><br><small style="color:var(--muted);">' + esc(s.endpoint) + '</small></td><td>' + esc(s.type) + '</td><td>' + s.priority + '</td><td>' + (s.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge">停用</span>') + '</td><td id="st-' + esc(s.id) + '"><small style="color:var(--muted);">未测</small></td><td style="white-space:nowrap;"><button class="sm" onclick="testSrc(' + i + ')">测活</button> <button class="sm ghost" onclick="editSrcForm(' + i + ')">改</button> <button class="sm ghost" onclick="toggleSrc(' + i + ')">' + (s.enabled ? "停" : "启") + '</button> <button class="sm red" onclick="delSrc(' + i + ')">删</button></td></tr>';
   }
-  h += '</tbody></table></div><div class="row" style="margin-top:12px;"><input id="sid" placeholder="ID 如 myapi" style="width:95px;" /><input id="sname" placeholder="名称" style="width:120px;" /><select id="stype"><option value="agg">agg</option><option value="vkeys">vkeys</option><option value="native">native</option><option value="bili">bili</option><option value="migu">migu</option></select><input id="send" placeholder="Endpoint URL" style="flex:1;min-width:180px;" /><input id="spri" type="number" value="20" style="width:65px;" /><button onclick="addSrc()">保存音源</button></div></div>';
+  h += '</tbody></table></div><div class="row" style="margin-top:12px;"><input id="sid" placeholder="ID 如 myapi" style="width:95px;" /><input id="sname" placeholder="名称" style="width:120px;" /><select id="stype"><option value="agg">agg</option><option value="kuwo">kuwo</option><option value="vkeys">vkeys</option><option value="migu">migu</option><option value="kugou">kugou</option><option value="meting">meting</option><option value="native">native</option><option value="bili">bili</option></select><input id="send" placeholder="Endpoint URL" style="flex:1;min-width:180px;" /><input id="spri" type="number" value="20" style="width:65px;" /><button onclick="addSrc()">保存音源</button></div></div>';
 
   h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;"><h3>每日自动同步策略（sync.py）</h3><span class="badge">' + esc(lastTimeStr) + ' · ' + esc(sc.lastSyncSummary) + '</span></div>' +
     '<div class="row"><span class="cfg-lbl">自动同步:</span><select id="syncEn"><option value="1"' + (sc.enabled ? ' selected' : '') + '>启用每日同步</option><option value="0"' + (!sc.enabled ? ' selected' : '') + '>暂停同步</option></select><span class="cfg-lbl">每次抓词上限:</span><input id="syncLrcIn" type="number" min="0" max="2000" value="' + esc(sc.lrcLimit) + '" style="width:95px;" /><span class="cfg-lbl">单榜最多曲目:</span><input id="syncChartIn" type="number" min="10" max="500" value="' + esc(sc.chartMax) + '" style="width:95px;" /><button onclick="saveSyncCfg()">保存同步参数</button></div>' +
     '<div style="font-size:12px;color:var(--muted);">提示：调整后会写入 D1，下次定时任务或手动触发 GitHub Actions 时自动生效（已内置 45 天空提交保活）。</div></div>';
 
-  h += '<div class="card"><h3>垃圾翻唱 / 伴奏自动过滤词配置（同时作用于播放器与 sync.py）</h3><div class="row"><input id="junkIn" value="' + esc(dashData.junkWords || "") + '" style="flex:1;" /><button onclick="saveJunk()">保存过滤词</button></div></div>';
+  h += '<div class="card"><h3>垃圾翻唱 / 伴奏自动过滤词配置（同时作用于播放器与 sync.py）</h3><div class="row"><input id="junkIn" value="' + esc(dashData.junkWords || "") + '" style="flex:1;" placeholder="逗号分隔；留空保存则关闭词表过滤" /><button onclick="saveJunk()">保存过滤词</button></div></div>';
   document.getElementById("main").innerHTML = h;
 }
 function testSrc(i) {
   var s = dashData.sources[i]; if (!s) return;
   var cell = document.getElementById("st-" + s.id); if (cell) cell.innerHTML = '<small>测活中...</small>';
   return req("/api/admin/source/test", { method: "POST", body: JSON.stringify({ id: s.id }) }).then(function(r) {
-    if (cell) cell.innerHTML = r.ok ? ('<span class="badge ok">' + r.status + ' · ' + r.ms + 'ms</span>') : ('<span class="badge blk">失败 ' + esc(r.status || r.error) + '</span>');
+    if (cell) cell.innerHTML = r.ok ? ('<span class="badge ok">' + esc(r.status) + ' · ' + r.ms + 'ms</span>') : ('<span class="badge blk">失败 ' + esc(r.status || r.error) + '</span>');
   });
 }
 function testAllSrc() { for (var i = 0; i < dashData.sources.length; i++) testSrc(i); }
@@ -330,7 +340,10 @@ function saveSyncCfg() {
     toast("同步参数已保存，下次 sync.py 运行生效");
   });
 }
-function saveJunk() { req("/api/admin/settings", { method: "POST", body: JSON.stringify({ junkWords: document.getElementById("junkIn").value }) }).then(function(){ toast("过滤词已保存"); }); }
+function saveJunk() {
+  var v = document.getElementById("junkIn").value;
+  req("/api/admin/settings", { method: "POST", body: JSON.stringify({ junkWords: v }) }).then(function(){ dashData.junkWords = v; toast("过滤词已保存"); });
+}
 
 var lastResolveDebug = null;
 function renderResolveTab() {
@@ -413,7 +426,8 @@ function loadSongs() {
   req("/api/admin/songs?q=" + encodeURIComponent(document.getElementById("sq")?.value || "") + "&cat=" + encodeURIComponent(document.getElementById("scat")?.value || "") + "&filter=" + (document.getElementById("sflt")?.value || "all") + "&sort=" + (document.getElementById("ssrt")?.value || "score") + "&page=" + songPage)
   .then(function(d) {
     songRows = d.songs || [];
-    var h = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">共 ' + d.total + ' 首，第 ' + d.page + ' 页</div><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>歌名 / 歌手</th><th>分类 / 歌词</th><th>已存源ID</th><th>操作</th></tr></thead><tbody>';
+    var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.limit || 25)));
+    var h = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">共 ' + d.total + ' 首，第 ' + d.page + ' / ' + totalPages + ' 页</div><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>歌名 / 歌手</th><th>分类 / 歌词</th><th>已存源ID</th><th>操作</th></tr></thead><tbody>';
     for (var i = 0; i < songRows.length; i++) {
       var s = songRows[i];
       h += '<tr><td>#' + s.id + '</td><td><b>' + esc(s.title) + '</b><br><small style="color:var(--muted);">' + esc(s.artist) + (s.album ? " · " + esc(s.album) : "") + '</small></td><td><span class="badge">' + esc(s.category) + '</span>' + (s.lrc_len > 10 ? '<span class="badge ok">有词</span>' : '<span class="badge miss">缺词</span>') + (s.is_blocked ? '<span class="badge blk">屏蔽</span>' : '') + '</td><td><small style="color:var(--muted);word-break:break-all;">' + esc(s.source_ids_json) + '</small></td><td style="white-space:nowrap;"><button class="sm" onclick="admPlay(' + i + ')">试听</button> <button class="sm ghost" onclick="openEditSong(' + i + ')">改</button> <button class="sm ghost" onclick="openEditLyric(' + s.id + ')">词</button> ' + (s.is_blocked ? '<button class="sm green" onclick="setBlock(' + s.id + ',0)">解</button> ' : '<button class="sm red" onclick="setBlock(' + s.id + ',1)">封</button> ') + '<button class="sm ghost" onclick="resetBili(' + s.id + ')">清BV</button> <button class="sm red" onclick="delSong(' + s.id + ')">删</button></td></tr>';
@@ -428,8 +442,8 @@ function admPlay(i) {
   req("/api/admin/play?id=" + s.id).then(function(r) {
     document.getElementById("audTitle").textContent = s.title + " [" + r.source + "]";
     var a = document.getElementById("admAudio");
-    var playUrl = r.needProxy ? (r.proxyUrl + (r.proxyUrl.slice(-7) === "atoken=" ? encodeURIComponent(ATOKEN) : "")) : r.url;
-    a.src = playUrl; a.play().catch(function(){});
+    a.src = r.needProxy ? r.proxyUrl : r.url;
+    a.play().catch(function(){});
   }).catch(function(e) { document.getElementById("audTitle").textContent = "失败: " + e.message; });
 }
 function openEditSong(i) {
@@ -441,7 +455,15 @@ function saveSong(id) {
   req("/api/admin/song/update", { method: "POST", body: JSON.stringify({ id: id, title: document.getElementById("e_title").value, artist: document.getElementById("e_artist").value, album: document.getElementById("e_album").value, cover: document.getElementById("e_cover").value, category: document.getElementById("e_cat").value, score: Number(document.getElementById("e_score").value), source_ids_json: document.getElementById("e_ids").value }) }).then(function() { closeModal(); toast("歌曲已更新"); loadSongs(); }).catch(function(e){ alert(e.message); });
 }
 function setBlock(id, blocked) { req("/api/admin/song/block", { method: "POST", body: JSON.stringify({ id: id, blocked: blocked }) }).then(function(){ toast(blocked ? "已屏蔽" : "已解封"); loadSongs(); }); }
-function delSong(id) { if (confirm("确认删除 #" + id + "？")) req("/api/admin/song/delete", { method: "POST", body: JSON.stringify({ id: id }) }).then(function(){ toast("已删除"); loadSongs(); }); }
+function delSong(id) {
+  if (confirm("确认删除 #" + id + "？")) {
+    req("/api/admin/song/delete", { method: "POST", body: JSON.stringify({ id: id }) }).then(function(){
+      if (songRows.length <= 1 && songPage > 1) songPage--;
+      toast("已删除");
+      loadSongs();
+    });
+  }
+}
 function resetBili(id) { req("/api/admin/song/reset-bili", { method: "POST", body: JSON.stringify({ id: id }) }).then(function(){ toast("已清除 BVID"); loadSongs(); }); }
 
 function renderLyricsTab() {
@@ -466,7 +488,8 @@ function runBackfillLoop(afterId, totalProc, totalUpd) {
 function loadLyricsList() {
   req("/api/admin/songs?q=" + encodeURIComponent(document.getElementById("lq")?.value || "") + "&filter=" + (document.getElementById("lflt")?.value || "no_lrc") + "&page=" + lrcPage).then(function(d) {
     lrcRows = d.songs || [];
-    var h = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">匹配 ' + d.total + ' 首</div><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>歌曲</th><th>歌词状态</th><th>操作</th></tr></thead><tbody>';
+    var totalPages = Math.max(1, Math.ceil((d.total || 0) / (d.limit || 25)));
+    var h = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">匹配 ' + d.total + ' 首，第 ' + d.page + ' / ' + totalPages + ' 页</div><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>歌曲</th><th>歌词状态</th><th>操作</th></tr></thead><tbody>';
     for (var i = 0; i < lrcRows.length; i++) {
       var s = lrcRows[i];
       h += '<tr><td>#' + s.id + '</td><td><b>' + esc(s.title) + '</b> - <small style="color:var(--muted);">' + esc(s.artist) + '</small></td><td>' + (s.lrc_len > 10 ? '<span class="badge ok">' + s.lrc_len + ' 字符</span>' : '<span class="badge miss">缺失</span>') + '</td><td><button class="sm" onclick="openEditLyric(' + s.id + ')">编辑 / 抓取歌词</button></td></tr>';
