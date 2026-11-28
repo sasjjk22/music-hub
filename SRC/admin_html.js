@@ -81,7 +81,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   button.ghost{background:var(--ghost-bg);color:var(--ghost-text);border:1px solid var(--line);}
 
   .tbl-wrap{width:100%;overflow-x:auto;}
-  table{width:100%;border-collapse:collapse;font-size:13px;min-width:600px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:660px;}
   td,th{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle;}
   th{font-size:12px;color:var(--muted);font-weight:600;}
   tbody tr:hover{background:var(--hover);}
@@ -103,6 +103,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
   .cfg-lbl{font-size:12px;color:var(--muted);margin-right:4px;}
   .tip-box{margin-top:14px;padding:10px 12px;border-radius:10px;background:var(--stat);border:1px solid var(--line);font-size:12px;color:var(--muted);line-height:1.55;}
+  .bench-box{margin-top:14px;padding:12px;border-radius:12px;background:var(--card-sub);border:1px solid var(--line);}
 </style>
 </head>
 <body>
@@ -134,7 +135,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
 
 <script>
 var ATOKEN = sessionStorage.getItem("mh_admin_tk") || "";
-var curTab = "overview", dashData = null, songRows = [], songPage = 1, lrcRows = [], lrcPage = 1, backfillRunning = false, toastTimer = null;
+var curTab = "overview", dashData = null, songRows = [], songPage = 1, lrcRows = [], lrcPage = 1, backfillRunning = false, benchRunning = false, benchState = null, toastTimer = null;
 function esc(s) { return String(s || "").replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
 function toast(msg) {
   var el = document.getElementById("toast"); el.textContent = msg; el.classList.add("show");
@@ -296,23 +297,87 @@ function togglePlayerDebug() {
   });
 }
 
+function formatSourceStat(id) {
+  var st = (dashData && dashData.sourceStats && dashData.sourceStats[id]) || null;
+  if (!st || (Number(st.ok || 0) + Number(st.fail || 0)) === 0) {
+    return '<small style="color:var(--muted);">暂无样本</small>';
+  }
+  var ok = Number(st.ok || 0), fail = Number(st.fail || 0), tot = ok + fail;
+  var rate = Math.round((ok / tot) * 100);
+  var ema = Number(st.ema != null ? st.ema : 50).toFixed(1);
+  var avgMs = Number(st.avgMs || 0);
+  var cls = Number(ema) >= 70 ? "ok" : (Number(ema) >= 40 ? "miss" : "blk");
+  return '<span class="badge ' + cls + '">健康分 ' + ema + '</span><br><small style="color:var(--muted);">' + ok + '/' + tot + ' (' + rate + '%) · ' + avgMs + 'ms</small>';
+}
+
+function renderBenchBoxHtml() {
+  if (!benchState) return "";
+  var b = benchState;
+  var pct = b.total ? Math.round((b.done / b.total) * 100) : 0;
+  var h = '<div class="bench-box"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
+    '<b>📊 曲库抽样实测分析（' + b.done + ' / ' + b.total + ' 首' + (benchRunning ? ' · 进行中' : ' · 已完成') + '）</b>' +
+    (benchRunning ? '<button class="sm red" onclick="stopBenchmark()">停止测试</button>' : '<button class="sm ghost" onclick="benchState=null;renderOverview()">收起面板</button>') +
+    '</div><div class="pbar"><div style="width:' + pct + '%"></div></div>';
+
+  var sumKeys = Object.keys(b.summary || {});
+  if (sumKeys.length) {
+    sumKeys.sort(function(x, y) {
+      var sx = b.summary[x], sy = b.summary[y];
+      var rx = sx.total ? sx.ok / sx.total : 0, ry = sy.total ? sy.ok / sy.total : 0;
+      if (Math.abs(ry - rx) > 0.01) return ry - rx;
+      return (sx.ok ? sx.msSum / sx.ok : 99999) - (sy.ok ? sy.msSum / sy.ok : 99999);
+    });
+    h += '<div style="margin:8px 0 10px;">' + sumKeys.map(function(k) {
+      var s = b.summary[k], rate = s.total ? Math.round((s.ok / s.total) * 100) : 0;
+      var avg = s.ok ? Math.round(s.msSum / s.ok) : 0;
+      var cls = rate >= 60 ? "ok" : (rate > 0 ? "miss" : "blk");
+      return '<span class="badge ' + cls + '">' + esc(k) + ': ' + s.ok + '/' + s.total + ' (' + rate + '%)' + (avg ? ' · ' + avg + 'ms' : '') + '</span>';
+    }).join(" ") + '</div>';
+  }
+
+  if (b.rows.length) {
+    h += '<div class="tbl-wrap"><table style="min-width:560px;"><thead><tr><th>抽样歌曲</th><th>命中源与耗时</th><th>未命中/跳过源</th></tr></thead><tbody>';
+    for (var i = 0; i < b.rows.length; i++) {
+      var r = b.rows[i];
+      var hitHtml = (r.hits || []).length
+        ? r.hits.map(function(x) { return '<span class="badge ok">' + esc(x.source) + ' · ' + x.ms + 'ms</span>'; }).join(" ")
+        : '<span class="badge blk">全部未命中</span>';
+      var failHtml = (r.fails || []).map(function(x) { return '<span class="badge">' + esc(x.source) + '(' + esc(x.reason) + ')</span>'; }).join(" ");
+      h += '<tr><td><b>' + esc(r.title) + '</b><br><small style="color:var(--muted);">' + esc(r.artist) + '</small></td><td>' + hitHtml + '</td><td>' + (failHtml || '<small style="color:var(--muted);">-</small>') + '</td></tr>';
+    }
+    h += '</tbody></table></div>';
+  }
+  return h + '</div>';
+}
+
 function renderOverview() {
   var st = dashData.stats || {}, pct = st.songs ? Math.round((st.lyrics / st.songs) * 100) : 0;
   var sc = dashData.syncConfig || { enabled: true, lrcLimit: 450, chartMax: 120, lastSyncAt: 0, lastSyncSummary: "暂无同步记录" };
   var lastTimeStr = sc.lastSyncAt ? new Date(sc.lastSyncAt * 1000).toLocaleString("zh-CN") : "尚未运行";
   var dbgOn = Boolean(dashData.playerDebug);
+  var tmoMs = Number(dashData.resolveTimeoutMs || 12000);
 
-  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;"><h3>曲库概览</h3><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="sm ' + (dbgOn ? "red" : "ghost") + '" onclick="togglePlayerDebug()">' + (dbgOn ? "🐛 调试窗口：已开启（点此隐藏）" : "🐛 开启播放器调试窗口") + '</button><button class="sm ghost" onclick="window.open(\\'/player?debug=1\\',\\'_blank\\')">打开调试播放器</button><button class="sm green" onclick="switchTab(\\'subs\\')">查看订阅源 / 切换融合模式</button>
+  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;"><h3>曲库概览</h3><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="sm ' + (dbgOn ? "red" : "ghost") + '" onclick="togglePlayerDebug()">' + (dbgOn ? "🐛 调试窗口：已开启（点此隐藏）" : "🐛 开启播放器调试窗口") + '</button><button class="sm ghost" onclick="window.open(\\'/player?debug=1\\',\\'_blank\\')">打开调试播放器</button><button class="sm green" onclick="switchTab(\\'subs\\')">查看订阅源 / 切换融合模式</button></div></div>' +
     '<div class="grid"><div class="stat"><b>' + (st.songs||0) + '</b><span>可用歌曲</span></div><div class="stat"><b>' + (st.charts||0) + '</b><span>精选榜单</span></div><div class="stat"><b>' + (st.lyrics||0) + ' (' + pct + '%)</b><span>歌词覆盖率</span></div><div class="stat"><b>' + (st.blocked||0) + '</b><span>已屏蔽</span></div></div><div style="margin-top:14px;">' + (dashData.categories || []).map(function(c) { return '<span class="badge">' + esc(c.category) + ': ' + c.c + '首</span>'; }).join("") + '</div>' +
     '<div class="tip-box">🐛 <b>调试窗口说明：</b>开启后，播放器顶部会显示「调试」按钮，可实时查看每首歌直连与云端各源请求路径、耗时、试听拦截及歌手/搜索接口详情；调试完成后点击上方按钮即可一键隐藏。</div></div>';
 
   var srcs = dashData.sources || [];
-  h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><h3>云端音源解析池</h3><button class="sm" onclick="testAllSrc()">一键全员测活</button></div><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>名称 / 地址</th><th>类型</th><th>优先级</th><th>状态</th><th>测活结果</th><th>操作</th></tr></thead><tbody>';
+  h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;"><h3>云端音源解析池（两波动态分流调度）</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">' +
+    '<select id="benchCnt" style="padding:4px 8px;font-size:12px;"><option value="5">抽样 5 首</option><option value="8" selected>抽样 8 首</option><option value="12">抽样 12 首</option></select>' +
+    '<button class="sm green" id="benchBtn" onclick="runBenchmark()"' + (benchRunning ? " disabled" : "") + '>⚡ 批量分析命中率</button>' +
+    '<button class="sm" onclick="autoRankSources()">📊 按命中率重排优先级</button>' +
+    '<button class="sm ghost" onclick="resetSourceStats()">🧹 重置统计</button>' +
+    '<button class="sm ghost" onclick="testAllSrc()">一键全员测活</button>' +
+    '</div></div><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>名称 / 地址</th><th>类型</th><th>优先级</th><th>状态</th><th>历史命中率 / 健康分</th><th>测活结果</th><th>操作</th></tr></thead><tbody>';
   for (var i = 0; i < srcs.length; i++) {
     var s = srcs[i];
-    h += '<tr><td>' + esc(s.id) + '</td><td><b>' + esc(s.name) + '</b><br><small style="color:var(--muted);">' + esc(s.endpoint) + '</small></td><td>' + esc(s.type) + '</td><td>' + s.priority + '</td><td>' + (s.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge">停用</span>') + '</td><td id="st-' + esc(s.id) + '"><small style="color:var(--muted);">未测</small></td><td style="white-space:nowrap;"><button class="sm" onclick="testSrc(' + i + ')">测活</button> <button class="sm ghost" onclick="editSrcForm(' + i + ')">改</button> <button class="sm ghost" onclick="toggleSrc(' + i + ')">' + (s.enabled ? "停" : "启") + '</button> <button class="sm red" onclick="delSrc(' + i + ')">删</button></td></tr>';
+    h += '<tr><td>' + esc(s.id) + '</td><td><b>' + esc(s.name) + '</b><br><small style="color:var(--muted);">' + esc(s.endpoint) + '</small></td><td>' + esc(s.type) + '</td><td>' + s.priority + '</td><td>' + (s.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge">停用</span>') + '</td><td id="stat-' + esc(s.id) + '">' + formatSourceStat(s.id) + '</td><td id="st-' + esc(s.id) + '"><small style="color:var(--muted);">未测</small></td><td style="white-space:nowrap;"><button class="sm" onclick="testSrc(' + i + ')">测活</button> <button class="sm ghost" onclick="editSrcForm(' + i + ')">改</button> <button class="sm ghost" onclick="toggleSrc(' + i + ')">' + (s.enabled ? "停" : "启") + '</button> <button class="sm red" onclick="delSrc(' + i + ')">删</button></td></tr>';
   }
-  h += '</tbody></table></div><div class="row" style="margin-top:12px;"><input id="sid" placeholder="ID 如 myapi" style="width:95px;" /><input id="sname" placeholder="名称" style="width:120px;" /><select id="stype"><option value="agg">agg</option><option value="kuwo">kuwo</option><option value="vkeys">vkeys</option><option value="migu">migu</option><option value="kugou">kugou</option><option value="meting">meting</option><option value="native">native</option><option value="bili">bili</option></select><input id="send" placeholder="Endpoint URL" style="flex:1;min-width:180px;" /><input id="spri" type="number" value="20" style="width:65px;" /><button onclick="addSrc()">保存音源</button></div></div>';
+  h += '</tbody></table></div><div class="row" style="margin-top:12px;"><input id="sid" placeholder="ID 如 myapi" style="width:95px;" /><input id="sname" placeholder="名称" style="width:120px;" /><select id="stype"><option value="agg">agg</option><option value="kuwo">kuwo</option><option value="vkeys">vkeys</option><option value="migu">migu</option><option value="kugou">kugou</option><option value="meting">meting</option><option value="native">native</option><option value="bili">bili</option></select><input id="send" placeholder="Endpoint URL" style="flex:1;min-width:180px;" /><input id="spri" type="number" value="20" style="width:65px;" /><button onclick="addSrc()">保存音源</button></div>' +
+    '<div id="benchWrap">' + renderBenchBoxHtml() + '</div>' +
+    '<div class="tip-box">⚡ <b>动态分波说明：</b>Worker 根据「手动优先级 + 近期健康分(EMA) - 均耗惩罚」实时排名，第 1 波（0ms）并发前 4 名主力源，第 2 波（950ms）再唤醒兜底源。长期 503 的源会自动降权让位，恢复后一旦命中即快速回分。</div></div>';
+
+  h += '<div class="card"><h3>云端并发解析全局超时（resolveTimeoutMs）</h3><div class="row"><span class="cfg-lbl">总超时(ms):</span><input id="tmoIn" type="number" min="3000" max="25000" step="500" value="' + esc(tmoMs) + '" style="width:110px;" /><button class="sm ghost" onclick="document.getElementById(\\'tmoIn\\').value=8000">8s (极速)</button><button class="sm ghost" onclick="document.getElementById(\\'tmoIn\\').value=12000">12s (推荐)</button><button class="sm ghost" onclick="document.getElementById(\\'tmoIn\\').value=18000">18s (深挖)</button><button onclick="saveResolveTimeout()">保存超时</button></div><div style="font-size:12px;color:var(--muted);">允许范围 3000 ~ 25000 ms，控制单次 /api/play 全源竞速的最长等待时间。</div></div>';
 
   h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;"><h3>每日自动同步策略（sync.py）</h3><span class="badge">' + esc(lastTimeStr) + ' · ' + esc(sc.lastSyncSummary) + '</span></div>' +
     '<div class="row"><span class="cfg-lbl">自动同步:</span><select id="syncEn"><option value="1"' + (sc.enabled ? ' selected' : '') + '>启用每日同步</option><option value="0"' + (!sc.enabled ? ' selected' : '') + '>暂停同步</option></select><span class="cfg-lbl">每次抓词上限:</span><input id="syncLrcIn" type="number" min="0" max="2000" value="' + esc(sc.lrcLimit) + '" style="width:95px;" /><span class="cfg-lbl">单榜最多曲目:</span><input id="syncChartIn" type="number" min="10" max="500" value="' + esc(sc.chartMax) + '" style="width:95px;" /><button onclick="saveSyncCfg()">保存同步参数</button></div>' +
@@ -321,6 +386,7 @@ function renderOverview() {
   h += '<div class="card"><h3>垃圾翻唱 / 伴奏自动过滤词配置（同时作用于播放器与 sync.py）</h3><div class="row"><input id="junkIn" value="' + esc(dashData.junkWords || "") + '" style="flex:1;" placeholder="逗号分隔；留空保存则关闭词表过滤" /><button onclick="saveJunk()">保存过滤词</button></div></div>';
   document.getElementById("main").innerHTML = h;
 }
+
 function testSrc(i) {
   var s = dashData.sources[i]; if (!s) return;
   var cell = document.getElementById("st-" + s.id); if (cell) cell.innerHTML = '<small>测活中...</small>';
@@ -333,6 +399,99 @@ function editSrcForm(i) { var s = dashData.sources[i]; document.getElementById("
 function toggleSrc(i) { var s = dashData.sources[i]; req("/api/admin/source", { method: "POST", body: JSON.stringify({ id:s.id, name:s.name, type:s.type, endpoint:s.endpoint, priority:s.priority, enabled:s.enabled?0:1 }) }).then(function(){ toast("状态已切换"); loadAll(); }); }
 function delSrc(i) { var s = dashData.sources[i]; if (confirm("删除音源 " + s.name + "？")) req("/api/admin/source/delete", { method: "POST", body: JSON.stringify({ id: s.id }) }).then(loadAll); }
 function addSrc() { req("/api/admin/source", { method: "POST", body: JSON.stringify({ id: document.getElementById("sid").value, name: document.getElementById("sname").value, type: document.getElementById("stype").value, endpoint: document.getElementById("send").value, priority: Number(document.getElementById("spri").value), enabled: 1 }) }).then(function(){ toast("音源已保存"); loadAll(); }); }
+
+function refreshSourceStatsCells() {
+  var srcs = dashData.sources || [];
+  for (var i = 0; i < srcs.length; i++) {
+    var cell = document.getElementById("stat-" + srcs[i].id);
+    if (cell) cell.innerHTML = formatSourceStat(srcs[i].id);
+  }
+}
+function stopBenchmark() {
+  benchRunning = false;
+  var bw = document.getElementById("benchWrap"); if (bw) bw.innerHTML = renderBenchBoxHtml();
+  var btn = document.getElementById("benchBtn"); if (btn) btn.disabled = false;
+  toast("已停止抽样测试");
+}
+function runBenchmark() {
+  if (benchRunning) return;
+  var cntEl = document.getElementById("benchCnt"), cnt = cntEl ? Number(cntEl.value || 8) : 8;
+  benchRunning = true;
+  benchState = { total: cnt, done: 0, summary: {}, rows: [] };
+  var btn = document.getElementById("benchBtn"); if (btn) btn.disabled = true;
+  var bw = document.getElementById("benchWrap"); if (bw) bw.innerHTML = renderBenchBoxHtml();
+
+  req("/api/admin/benchmark", { method: "POST", body: JSON.stringify({ action: "pick", count: cnt }) }).then(function(picked) {
+    var songs = picked.songs || [];
+    if (!songs.length) throw new Error("曲库暂无可抽样歌曲");
+    benchState.total = songs.length;
+    var idx = 0;
+    function nextOne() {
+      if (!benchRunning || idx >= songs.length) {
+        benchRunning = false;
+        if (document.getElementById("benchBtn")) document.getElementById("benchBtn").disabled = false;
+        if (document.getElementById("benchWrap")) document.getElementById("benchWrap").innerHTML = renderBenchBoxHtml();
+        toast("抽样分析完成！已更新历史健康分");
+        return;
+      }
+      var sg = songs[idx++];
+      req("/api/admin/benchmark", { method: "POST", body: JSON.stringify({ songId: sg.id }) }).then(function(res) {
+        if (res.sourceStats) { dashData.sourceStats = res.sourceStats; refreshSourceStatsCells(); }
+        var hits = res.hitSources || [], fails = [];
+        (res.debugSources || []).forEach(function(ds) {
+          if (ds.status === "disabled") return;
+          if (!benchState.summary[ds.source]) benchState.summary[ds.source] = { ok: 0, total: 0, msSum: 0 };
+          var sm = benchState.summary[ds.source];
+          sm.total++;
+          if (ds.status === "hit") { sm.ok++; sm.msSum += Number(ds.ms || 0); }
+          else fails.push({ source: ds.source, reason: ds.error || ds.status });
+        });
+        benchState.done++;
+        benchState.rows.push({ title: sg.title, artist: sg.artist, hits: hits, fails: fails });
+        if (curTab === "overview") {
+          var box = document.getElementById("benchWrap");
+          if (box) box.innerHTML = renderBenchBoxHtml();
+        }
+        nextOne();
+      }).catch(function(e) {
+        benchState.done++;
+        benchState.rows.push({ title: sg.title, artist: sg.artist, hits: [], fails: [{ source: "error", reason: e.message }] });
+        if (curTab === "overview") {
+          var box = document.getElementById("benchWrap");
+          if (box) box.innerHTML = renderBenchBoxHtml();
+        }
+        nextOne();
+      });
+    }
+    nextOne();
+  }).catch(function(e) {
+    benchRunning = false;
+    if (document.getElementById("benchBtn")) document.getElementById("benchBtn").disabled = false;
+    toast("抽样失败：" + e.message);
+  });
+}
+function autoRankSources() {
+  req("/api/admin/source/auto-rank", { method: "POST", body: "{}" }).then(function(r) {
+    toast("已按近期健康分与耗时重排优先级（第1波将跑前4名）");
+    loadAll();
+  }).catch(function(e) { toast("重排失败：" + e.message); });
+}
+function resetSourceStats() {
+  if (!confirm("确认清空所有音源的历史命中率与健康分统计？")) return;
+  req("/api/admin/source/stats/reset", { method: "POST", body: "{}" }).then(function() {
+    dashData.sourceStats = {};
+    refreshSourceStatsCells();
+    toast("音源统计已重置");
+  }).catch(function(e) { toast("重置失败：" + e.message); });
+}
+function saveResolveTimeout() {
+  var v = Math.max(3000, Math.min(25000, Number(document.getElementById("tmoIn").value || 12000)));
+  document.getElementById("tmoIn").value = v;
+  req("/api/admin/settings", { method: "POST", body: JSON.stringify({ resolveTimeoutMs: v }) }).then(function() {
+    dashData.resolveTimeoutMs = v;
+    toast("全局解析超时已更新为 " + v + "ms");
+  });
+}
 function saveSyncCfg() {
   var en = document.getElementById("syncEn").value === "1", lrc = Math.max(0, Number(document.getElementById("syncLrcIn").value || 0)), cmax = Math.max(10, Number(document.getElementById("syncChartIn").value || 120));
   req("/api/admin/settings", { method: "POST", body: JSON.stringify({ syncEnabled: en, syncLrcLimit: lrc, syncChartMax: cmax }) }).then(function() {
