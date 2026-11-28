@@ -11,6 +11,11 @@ const MIXIN_TAB = [
   17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34,
   44, 52,
 ];
+const NOISE = [
+  "翻唱", "cover", "教学", "吉他", "钢琴", "伴奏", "鬼畜", "dj版",
+  "reaction", "指弹", "弹唱", "二创", "纯音乐", "演奏", "女声版",
+  "男声版", "八音盒", "古筝", "ai翻唱",
+];
 
 let cache = { buvid3: "", buvid4: "", imgKey: "", subKey: "", ts: 0 };
 
@@ -72,7 +77,7 @@ function toSeconds(dur) {
 module.exports = {
   platform: "MusicHub·B站音频",
   author: "MusicHub",
-  version: "1.0.1",
+  version: "1.0.2",
   cacheControl: "no-cache",
   supportedSearchType: ["music"],
 
@@ -98,8 +103,10 @@ module.exports = {
     const rawList = data?.data?.result || [];
     const ql = String(query || "").toLowerCase();
     const list = rawList.filter((item) => {
+      const d = toSeconds(item.duration);
+      if (d < 30 || d > 900) return false;
       const title = stripTags(item.title).toLowerCase();
-      return !["翻唱", "cover", "吉他", "钢琴", "弹唱", "教学", "伴奏", "二创"].some((w) => title.includes(w) && !ql.includes(w));
+      return !NOISE.some((w) => title.includes(w) && !ql.includes(w));
     });
     return {
       isEnd: rawList.length < 20,
