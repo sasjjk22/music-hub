@@ -1634,7 +1634,7 @@ async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.b
         const p = String(it.duration || "").split(":").map(Number);
         const d = p.length === 2 ? p[0] * 60 + p[1] : (p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : 0);
         if (d < 30 || d > 600) continue;
-        let sc = scoreCandidate(rawT, rawT + " " + (it.author || ""), song.title, song.artist, d, song.duration, junkWords);
+        
         let sc = scoreCandidate(rawT, rawT + " " + (it.author || ""), song.title, song.artist, d, song.duration, junkWords, false);
         if (noise.some((nw) => rawT.toLowerCase().includes(nw) && !song.title.toLowerCase().includes(nw))) continue;
         if (rawT.toLowerCase().includes("mv") || rawT.toLowerCase().includes("官方") || rawT.toLowerCase().includes("原版")) sc += 25;
