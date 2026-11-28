@@ -4,6 +4,20 @@ const axios = require("axios");
 const API = "https://monster-siren.hypergryph.com/api";
 let songsCache = null;
 let songsCacheTs = 0;
+let albumsCache = null;
+let albumsCacheTs = 0;
+
+async function fetchAllAlbums() {
+  const now = Date.now();
+  if (albumsCache && albumsCache.length && now - albumsCacheTs < 1800 * 1000) return albumsCache;
+  const { data } = await axios.get(`${API}/albums`, { timeout: 8000 });
+  const list = data?.data || [];
+  if (list.length) {
+    albumsCache = list;
+    albumsCacheTs = now;
+  }
+  return list;
+}
 
 async function fetchAllSongs() {
   const now = Date.now();
@@ -20,39 +34,46 @@ async function fetchAllSongs() {
 module.exports = {
   platform: "MusicHub·塞壬唱片",
   author: "MusicHub",
-  version: "1.0.1",
+  version: "1.0.2",
   cacheControl: "no-cache",
   supportedSearchType: ["music", "album"],
 
   async search(query, page, type) {
     const q = (query || "").toLowerCase();
     if (type === "album") {
-      const { data } = await axios.get(`${API}/albums`, { timeout: 8000 });
-      const list = (data?.data || [])
-        .filter((a) => !q || a.name.toLowerCase().includes(q))
-        .slice((page - 1) * 20, page * 20)
-        .map((a) => ({
+      const allAlbums = await fetchAllAlbums();
+      const matchedAlbums = allAlbums.filter((a) => !q || a.name.toLowerCase().includes(q));
+      const slice = matchedAlbums.slice((page - 1) * 20, page * 20);
+      return {
+        isEnd: page * 20 >= matchedAlbums.length,
+        data: slice.map((a) => ({
           id: a.cid,
           title: a.name,
           artist: (a.artistes || []).join(" / ") || "塞壬唱片-MSR",
           artwork: a.coverUrl,
-        }));
-      return { isEnd: list.length < 20, data: list };
+        })),
+      };
     }
 
-    const all = await fetchAllSongs();
+    const [all, albums] = await Promise.all([fetchAllSongs(), fetchAllAlbums().catch(() => [])]);
+    const albumMap = new Map(albums.map((a) => [a.cid, a]));
     const matched = all.filter(
       (s) => !q || s.name.toLowerCase().includes(q) || (s.artists || []).join(",").toLowerCase().includes(q)
     );
     const slice = matched.slice((page - 1) * 20, page * 20);
     return {
       isEnd: page * 20 >= matched.length,
-      data: slice.map((s) => ({
-        id: s.cid,
-        title: s.name,
-        artist: (s.artists || []).join(" / ") || "塞壬唱片-MSR",
-        albumCid: s.albumCid,
-      })),
+      data: slice.map((s) => {
+        const alb = albumMap.get(s.albumCid);
+        return {
+          id: s.cid,
+          title: s.name,
+          artist: (s.artists || []).join(" / ") || "塞壬唱片-MSR",
+          album: alb?.name || "",
+          artwork: alb?.coverUrl || undefined,
+          albumCid: s.albumCid,
+        };
+      }),
     };
   },
 
@@ -93,11 +114,11 @@ module.exports = {
   },
 
   async getTopLists() {
-    const { data } = await axios.get(`${API}/albums`, { timeout: 8000 });
+    const allAlbums = await fetchAllAlbums();
     return [
       {
         title: "塞壬唱片官方专辑库",
-        data: (data?.data || []).slice(0, 30).map((a) => ({
+        data: allAlbums.slice(0, 30).map((a) => ({
           id: a.cid,
           title: a.name,
           coverImg: a.coverUrl,
