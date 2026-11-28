@@ -226,57 +226,47 @@ async function fallbackBilibiliAudio(title, artist, targetDuration) {
 }
 
 async function searchMusic(query, page) {
-  const results = [];
-  try {
+  const results = [], seen = new Set();
+  // GD Studio expects exactly one source per request; comma-joined providers
+  // are not a supported multi-source value.
+  const providers = ["netease", "joox"];
+  const batches = await Promise.allSettled(providers.map(async (source) => {
     const { data } = await axios.get(AGG_API, {
-      params: { types: "search", source: "netease,kuwo", name: query, count: 20, pages: page },
+      params: { types: "search", source, name: query, count: 20, pages: page },
       headers: { "User-Agent": UA },
-      timeout: 8000,
+      timeout: 6500,
     });
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        if (isJunkTitle(item.name, query)) continue;
-        const src = item.source || "netease";
-        results.push({
-          id: `${src}_${item.id}`,
-          title: item.name,
-          artist: Array.isArray(item.artist) ? item.artist.join(" / ") : item.artist || "未知歌手",
-          album: item.album || "",
-          duration: item.duration ? Math.round(Number(item.duration)) : undefined,
-          artwork: item.pic_id ? `${AGG_API}?types=pic&source=${src}&id=${item.pic_id}&size=500` : undefined,
-          _source: src,
-          _rawId: String(item.id),
-          _lyricId: String(item.lyric_id || item.id),
-        });
-      }
-    }
-  } catch (_) {}
+    if (!Array.isArray(data)) return { source, data: [] };
+    return { source, data };
+  }));
 
-  if (!results.length && page === 1) {
-    try {
-      const { data } = await axios.get("https://music.163.com/api/search/get", {
-        params: { s: query, type: 1, limit: 25, offset: 0 },
-        headers: { "User-Agent": UA, Referer: "https://music.163.com/" },
-        timeout: 8000,
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    if (batch.status !== "fulfilled") continue;
+    const source = batch.value.source;
+    for (const item of batch.value.data) {
+      const title = String(item.name || "").trim();
+      const artist = Array.isArray(item.artist) ? item.artist.join(" / ") : item.artist || "未知歌手";
+      const album = String(item.album || "");
+      const meta = `${title} ${artist} ${album}`.toLowerCase();
+      if (!title || JUNK_WORDS.some((w) => meta.includes(w) && !String(query || "").toLowerCase().includes(w))) continue;
+      const key = `${normalizeName(title)}|${normalizeName(artist.split(/[\/,、&]/)[0])}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const src = item.source || source;
+      results.push({
+        id: `${src}_${item.id}`,
+        title,
+        artist,
+        album,
+        duration: item.duration ? Math.round(Number(item.duration)) : undefined,
+        artwork: item.pic_id ? `${AGG_API}?types=pic&source=${src}&id=${item.pic_id}&size=500` : undefined,
+        _source: src,
+        _rawId: String(item.id),
+        _lyricId: String(item.lyric_id || item.id),
       });
-      const songs = data?.result?.songs || [];
-      for (const s of songs) {
-        if (isJunkTitle(s.name, query)) continue;
-        results.push({
-          id: `netease_${s.id}`,
-          title: s.name,
-          artist: (s.artists || []).map((a) => a.name).join(" / "),
-          album: s.album?.name || "",
-          duration: Math.round((s.duration || 0) / 1000),
-          artwork: s.album?.picUrl,
-          _source: "netease",
-          _rawId: String(s.id),
-          _lyricId: String(s.id),
-        });
-      }
-    } catch (_) {}
+    }
   }
-
   return { isEnd: results.length < 15, data: results };
 }
 
@@ -299,7 +289,7 @@ async function resolveFromAgg(source, rawId, brList, durationSec) {
 module.exports = {
   platform: "MusicHub·全网聚合",
   author: "MusicHub",
-  version: "1.0.2",
+  version: "1.0.3",
   cacheControl: "no-cache",
   supportedSearchType: ["music"],
 
@@ -331,7 +321,15 @@ module.exports = {
           timeout: 6000,
         });
         if (!Array.isArray(data) || !data.length) continue;
-        const candidate = data.find((x) => !isJunkTitle(x.name, musicItem.title)) || data[0];
+        const candidate = data.find((x) => {
+          const a = Array.isArray(x.artist) ? x.artist.join(" ") : String(x.artist || "");
+          const meta = `${x.name || ""} ${a} ${x.album || ""}`.toLowerCase();
+          const wanted = normalizeName(musicItem.artist || "");
+          const actual = normalizeName(a);
+          return !JUNK_WORDS.some((w) => meta.includes(w)) && !isJunkTitle(x.name, musicItem.title) &&
+            (!wanted || !actual || actual.includes(wanted) || wanted.includes(actual));
+        });
+        if (!candidate) continue;
         const hit = await resolveFromAgg(src, String(candidate.id), brList, dur);
         if (hit) return hit;
       } catch (_) {}

@@ -361,7 +361,24 @@ var DEFAULT_RADIOS = [
   { id: "acg", title: "二次元 · 游戏原声", desc: "ACG 主题曲与塞壬唱片官方无损库", icon: "🎧", grad: "linear-gradient(135deg,#2563eb,#06b6d4)" },
   { id: "drive", title: "公路驾驶 · 燃曲电音", desc: "摇滚、节奏电音，提神醒脑", icon: "🚗", grad: "linear-gradient(135deg,#dc2626,#f97316)" }
 ];
-var JUNK_W = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x", "纯音乐", "instrumental", "钢琴曲", "演奏版", "背景音乐", "轻音乐", "伴奏版"];
+var JUNK_W = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x", "纯音乐", "instrumental", "钢琴曲", "演奏版", "背景音乐", "轻音乐", "伴奏版", "翻唱", "cover", "吉他版", "弹唱", "翻奏"];
+var HARD_ARTIST_W = ["周杰伦", "jay chou", "林俊杰", "陈奕迅", "邓紫棋", "薛之谦", "陶喆", "王力宏"];
+var HARD_TRACK_W = ["七里香", "一路向北", "晴天", "稻香", "夜曲", "以父之名", "青花瓷", "江南", "修炼爱情", "十年", "富士山下", "k歌之王"];
+function isStrictSongLocal(s) {
+  var a = String(s && s.artist || "").toLowerCase(), t = String(s && s.title || "").toLowerCase();
+  return HARD_ARTIST_W.some(function(x){ return a.indexOf(x.toLowerCase()) >= 0; }) || HARD_TRACK_W.some(function(x){ return t.indexOf(x.toLowerCase()) >= 0; });
+}
+function badVariantLocal(name, artist, album) {
+  return /(纯音乐|纯钢琴|instrumental|钢琴曲|钢琴演奏|演奏版|器乐版|背景音乐|轻音乐|伴奏版|卡拉.?ok|翻唱|cover|吉他版|弹唱|翻奏|dj版)/i.test([name, artist, album].join(" "));
+}
+function artistMatchesLocal(candidate, expected) {
+  var c = normStrLocal(Array.isArray(candidate) ? candidate.join(" ") : candidate), e = normStrLocal(String(expected || "").split(/[/,、&]/)[0]);
+  if (!e) return true;
+  if (!c) return false;
+  if (c.indexOf(e) >= 0 || e.indexOf(c) >= 0) return true;
+  var groups = [["周杰伦","jay chou","周董"],["林俊杰","jj lin","jj"],["陈奕迅","eason chan"],["邓紫棋","g.e.m.","gem"],["薛之谦","joker xue"],["陶喆","david tao"],["王力宏","wang leehom","leehom wang"]];
+  return groups.some(function(g){ return g.some(function(a){return e.indexOf(normStrLocal(a))>=0;}) && g.some(function(a){return c.indexOf(normStrLocal(a))>=0;}); });
+}
 var SOFT_W = ["live", "现场", "演唱会", "翻唱", "cover", "吉他版", "钢琴版", "纯享", "加速", "降调"];
 
 function esc(s) { return String(s || "").replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
@@ -375,12 +392,13 @@ function thumb(u, sz) {
 function normStrLocal(s) {
   return String(s || "").toLowerCase().split("(")[0].split("（")[0].split("[")[0].split("【")[0].replace(/\\s+/g, " ").trim();
 }
-function scoreMatchLocal(cName, cArtist, oTitle, oArtist, cDur, oDur) {
+function scoreMatchLocal(cName, cArtist, oTitle, oArtist, cDur, oDur, cAlbum, strict) {
   var raw = String(cName || "").toLowerCase(), ro = String(oTitle || "").toLowerCase();
-  if (!raw) return -999;
+  if (!raw || badVariantLocal(cName, cArtist, cAlbum)) return -999;
   for (var i = 0; i < JUNK_W.length; i++) if (raw.indexOf(JUNK_W[i]) >= 0 && ro.indexOf(JUNK_W[i]) < 0) return -999;
   var d = Number(cDur || 0), od = Number(oDur || 0);
   if (od >= 90 && d > 0 && (d <= 65 || d < od * 0.72)) return -999;
+  if (strict && oArtist && !artistMatchesLocal(cArtist, oArtist)) return -999;
   var sc = 0, t = normStrLocal(cName), ot = normStrLocal(oTitle);
   sc += (t === ot) ? 55 : ((t.indexOf(ot) >= 0 || ot.indexOf(t) >= 0) ? 20 : -45);
   var oa = normStrLocal(String(oArtist || "").split(/[/,、&]/)[0]), ca = normStrLocal(Array.isArray(cArtist) ? cArtist.join(" ") : cArtist);
@@ -752,11 +770,15 @@ function openPresetArtist(i) { var ar = artistsCache[i]; if (ar) openArtistDetai
 function openSearchedArtist(i) { var ar = searchedArtists[i]; if (ar) openArtistDetail(ar.name, ar.id, ar.worksNum ? ar.worksNum + "首作品" : "在线歌手"); }
 function openArtistDetail(name, aid, tag) {
   curTabName = "detail"; backTarget = "artists";
-  pageState = { type: "artist", query: name, artistId: aid || "", page: 1, hasMore: false, artistAlbums: [], artistSongs: [], artistTab: "songs", artistName: name, artistTag: tag || "" };
+  pageState = { type: "artist", query: name, artistId: aid || "", artistOffset: 0, page: 1, hasMore: false, loadingMore: false, artistAlbums: [], artistSongs: [], artistTab: "songs", artistName: name, artistTag: tag || "" };
+  var requestState = pageState;
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">检索 ' + esc(name) + ' 单曲与专辑...</div>';
   api("/api/artist?name=" + encodeURIComponent(name) + "&id=" + encodeURIComponent(aid || "") + "&page=1").then(function(d) {
+    if (pageState !== requestState) return;
+    pageState.artistId = String(d.artistId || aid || "");
+    pageState.artistOffset = Math.max(0, Number(d.nextOffset || 0));
     pageState.hasMore = Boolean(d.hasMore); pageState.artistAlbums = d.albums || []; pageState.artistSongs = d.songs || []; viewSongs = pageState.artistSongs; renderArtistDetail();
-  }).catch(function(){});
+  }).catch(function(){ if (pageState === requestState) toast("歌手数据加载失败，请重试"); });
 }
 function renderArtistDetail() {
   viewSongs = pageState.artistSongs || [];
@@ -808,15 +830,40 @@ function doSearch(page) {
   }).catch(function(){});
 }
 function loadMore() {
-  var nextP = (pageState.page || 1) + 1;
-  if (pageState.type === "search") { doSearch(nextP); return; }
+  if (!pageState || !pageState.hasMore) return;
+  if (pageState.type === "search") { doSearch((pageState.page || 1) + 1); return; }
   if (pageState.type === "artist") {
-    api("/api/artist?name=" + encodeURIComponent(pageState.query) + "&page=" + nextP).then(function(d) {
-      pageState.page = nextP; pageState.hasMore = Boolean(d.hasMore);
-      var seen = {}; pageState.artistSongs.forEach(function(s) { seen[s.norm_key] = 1; });
-      (d.songs || []).forEach(function(s) { if (!seen[s.norm_key]) { seen[s.norm_key] = 1; pageState.artistSongs.push(s); } });
-      renderArtistDetail();
-    }).catch(function(){});
+    if (pageState.loadingMore) return;
+    var stateRef = pageState;
+    var nextP = (stateRef.page || 1) + 1;
+    var offset = Math.max(0, Number(stateRef.artistOffset || 0));
+    stateRef.loadingMore = true;
+    renderArtistDetail();
+    var endpoint = "/api/artist?name=" + encodeURIComponent(stateRef.query) +
+      "&id=" + encodeURIComponent(stateRef.artistId || "") +
+      "&page=" + nextP + "&offset=" + offset;
+    api(endpoint).then(function(d) {
+      if (pageState !== stateRef) return;
+      var seen = {};
+      stateRef.artistSongs.forEach(function(song) { seen[song.norm_key || makeNormKeyLocal(song.title, song.artist)] = 1; });
+      var batch = d.songs || [], added = 0;
+      batch.forEach(function(song) {
+        var key = song.norm_key || makeNormKeyLocal(song.title, song.artist);
+        if (!seen[key]) { seen[key] = 1; stateRef.artistSongs.push(song); added++; }
+      });
+      stateRef.page = nextP;
+      stateRef.artistId = String(d.artistId || stateRef.artistId || "");
+      stateRef.artistOffset = Math.max(offset, Number(d.nextOffset || (offset + batch.length)));
+      stateRef.hasMore = Boolean(d.hasMore && batch.length);
+      if (!added && !batch.length) toast("没有更多歌曲了");
+    }).catch(function() {
+      if (pageState === stateRef) toast("加载失败，请稍后重试");
+    }).finally(function() {
+      if (pageState === stateRef) {
+        stateRef.loadingMore = false;
+        renderArtistDetail();
+      }
+    });
   }
 }
 
@@ -966,7 +1013,10 @@ function buildSongsRowsHtml(songs, hasMore, ctxMode) {
     var extraBtn = (ctxMode && ctxMode.indexOf("sheet:") === 0) ? '<button class="ico-btn" title="从歌单移除" onclick="removeFromSheet(' + Number(ctxMode.split(":")[1]) + ',' + i + ')">✕</button>' : (ctxMode === "queue" ? '<button class="ico-btn" title="移出队列" onclick="removeFromQueue(' + i + ')">✕</button>' : '<button class="ico-btn" title="加到歌单" onclick="addViewToSheet(' + i + ')">📁</button>');
     h += '<div class="s-row' + (isCur ? " active" : "") + '" data-nk="' + esc(s.norm_key) + '" onclick="playViewIdx(' + i + ')"><div class="s-num">' + (isCur ? "&#9654;" : (i + 1)) + '</div><img class="s-cov" loading="lazy" referrerpolicy="no-referrer" src="' + esc(thumb(s.cover, 100)) + '" /><div class="s-main"><div class="s-t">' + esc(s.title) + '</div><div class="s-a">' + esc(s.artist) + (s.album ? " · " + esc(s.album) : "") + '</div></div><div class="s-d">' + (s.duration ? fmt(s.duration) : "--:--") + '</div><div class="s-acts" onclick="event.stopPropagation()"><button class="ico-btn' + (loved ? " loved" : "") + '" title="红心收藏" onclick="toggleViewFav(' + i + ',this)">' + (loved ? "&#9829;" : "&#9825;") + '</button>' + extraBtn + '<button class="ico-btn" title="下载到本地" onclick="downloadViewIdx(' + i + ')">⬇</button><button class="ico-btn" title="下一首播放" onclick="addNext(' + i + ')">+</button></div></div>';
   }
-  if (hasMore) h += '<div style="text-align:center;padding:16px;"><button class="btn ghost" onclick="loadMore()">加载更多歌曲 &darr;</button></div>';
+  if (hasMore) {
+    var isArtistLoading = pageState && pageState.type === "artist" && pageState.loadingMore;
+    h += '<div style="text-align:center;padding:16px;"><button class="btn ghost" ' + (isArtistLoading ? 'disabled style="opacity:.65;cursor:wait;"' : '') + ' onclick="loadMore()">' + (isArtistLoading ? '正在加载…' : '加载更多歌曲 &darr;') + '</button></div>';
+  }
   return h;
 }
 function syncActiveRowHighlight() {
@@ -1022,7 +1072,8 @@ function fetchDirectGD(s, plat, label, seq) {
     var timer = controller ? setTimeout(function(){ controller.abort(); }, reqTimeout) : null;
     return fetch(url, controller ? { signal: controller.signal } : {}).finally(function(){ if (timer) clearTimeout(timer); });
   }
-  var p = (plat === "netease" && s.ext_source === "netease" && s.ext_id)
+  var strictIdentity = isStrictSongLocal(s);
+  var p = (plat === "netease" && !strictIdentity && s.ext_source === "netease" && s.ext_id)
     ? Promise.resolve(s.ext_id)
     : directFetch(base + "search&source=" + plat + "&name=" + encodeURIComponent(kw) + "&count=6&pages=1")
         .then(function(r) { if (!r.ok || !(r.headers.get("content-type") || "").toLowerCase().includes("json")) throw new Error("gd_search_http"); return r.json(); })
@@ -1030,10 +1081,10 @@ function fetchDirectGD(s, plat, label, seq) {
           if (!Array.isArray(arr) || !arr.length) return "";
           var best = null, bsc = -100;
           for (var i = 0; i < arr.length; i++) {
-            var sc = scoreMatchLocal(arr[i].name, arr[i].artist, s.title, s.artist, 0, s.duration);
+            var sc = scoreMatchLocal(arr[i].name, arr[i].artist, s.title, s.artist, Number(arr[i].duration || 0), s.duration, arr[i].album || "", isStrictSongLocal(s));
             if (sc > bsc) { bsc = sc; best = arr[i]; }
           }
-          return (best && bsc >= 20 && best.id) ? String(best.id) : "";
+          return (best && bsc >= (strictIdentity ? 80 : 20) && best.id) ? String(best.id) : "";
         });
 
   p.then(function(pid) {
