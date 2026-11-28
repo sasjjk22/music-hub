@@ -1291,7 +1291,7 @@ function fetchDirectGD(s, plat, label, seq) {
   var cleanArtist = (s.artist || "").split(/[/,、]|\\s+&\\s+/)[0].trim();
   var kw = (normStrLocal(s.title) + " " + cleanArtist).trim();
   var base = "https://music-api.gdstudio.xyz/api.php?use_xbridge3=true&types=";
-  var reqTimeout = 8000;
+  var reqTimeout = 12000;
   var t0 = Date.now(), searchUrl = base + "search&source=" + plat + "&name=" + encodeURIComponent(kw) + "&count=6&pages=1";
   function directFetch(url) {
     var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
