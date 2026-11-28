@@ -164,25 +164,7 @@ function isJunkTitle(title, query = "", junkList = DEFAULT_JUNK_WORDS) {
 }
 
 // 全歌手 Token 原版打分器：合唱曲命中任一主唱即加分 + 72% 时长底线
-function scoreCandidate(candName, candArtist, origTitle, origArtist, candDur, origDur, junkList = DEFAULT_JUNK_WORDS) {
-  const rawName = String(candName || "").toLowerCase(), rawOrig = String(origTitle || "").toLowerCase();
-  if (!rawName || isJunkTitle(rawName, rawOrig, junkList)) return -999;
 
-  const dur = Number(candDur || 0), oDur = Number(origDur || 0);
-  if (oDur >= 90 && dur > 0 && (dur <= 65 || dur < oDur * 0.72)) return -999;
-
-  let score = 0;
-  const t = normalizeName(candName), ot = normalizeName(origTitle);
-  if (t === ot) score += 55;
-  else if (t.includes(ot) || ot.includes(t)) score += 20;
-  else score -= 45;
-
-  const artistTokens = String(origArtist || "").split(/[/,、&]/).map(normalizeName).filter((x) => x && x !== "未知歌手");
-  const ca = normalizeName(Array.isArray(candArtist) ? candArtist.join(" ") : candArtist);
-  if (artistTokens.length && ca) {
-    const hit = artistTokens.some((a) => ca.includes(a) || a.includes(ca));
-    score += hit ? 65 : -120;
-  }
 
   for (const w of SOFT_PENALTY_WORDS) {
     if (rawName.includes(w) && !rawOrig.includes(w)) score -= 45;
