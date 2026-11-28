@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -14,9 +15,9 @@ NE_HEADERS = {
     "Referer": "https://music.163.com/",
     "Cookie": "os=pc; appver=2.9.7",
 }
-DEFAULT_JUNK_WORDS = ("dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版")
+DEFAULT_JUNK_WORDS = ("dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x")
+LRC_MISS_TTL_SEC = 14 * 86400
 
-# 榜单配置: (playlist_id, 标题, 首页分类, 歌曲分类, 排序权重, 抓取数量)
 NETEASE_CHARTS = [
     ("3778678", "热歌榜", "核心榜单", "华语", 10, 120),
     ("19723756", "飙升榜", "核心榜单", "华语", 15, 100),
@@ -38,26 +39,17 @@ NETEASE_CHARTS = [
 ]
 
 CLASSIC_QUERIES = [
-    "周杰伦 晴天 七里香 稻香",
-    "张学友 吻别 一路上有你 祝福",
-    "陈奕迅 十年 富士山下 浮夸",
-    "Beyond 海阔天空 光辉岁月 真的爱你",
-    "王菲 红豆 传奇 匆匆那年",
-    "林俊杰 江南 修炼爱情 曹操",
-    "孙燕姿 遇见 我怀念的 天黑黑",
-    "邓丽君 月亮代表我的心 甜蜜蜜",
-    "张国荣 风继续吹 沉默是金",
-    "李宗盛 凡人歌 山丘 鬼迷心窍",
-    "朴树 平凡之路 生如夏花 那些花儿",
-    "许巍 曾经的你 蓝莲花 故乡",
-    "伍佰 挪威的森林 突然的自我",
-    "莫文蔚 阴天 盛夏的果实 慢慢喜欢你",
-    "陶喆 爱很简单 就是爱你 流沙",
-    "五月天 突然好想你 倔强 温柔",
+    "周杰伦 晴天", "周杰伦 七里香", "周杰伦 稻香",
+    "张学友 吻别", "张学友 一路上有你", "陈奕迅 十年", "陈奕迅 富士山下",
+    "Beyond 海阔天空", "Beyond 光辉岁月", "王菲 红豆", "王菲 匆匆那年",
+    "林俊杰 江南", "林俊杰 修炼爱情", "孙燕姿 遇见", "孙燕姿 我怀念的",
+    "邓丽君 月亮代表我的心", "张国荣 风继续吹", "李宗盛 山丘",
+    "朴树 平凡之路", "许巍 蓝莲花", "伍佰 挪威的森林",
+    "莫文蔚 盛夏的果实", "陶喆 爱很简单", "五月天 突然好想你",
 ]
 
 
-def http_json(url, method="GET", headers=None, data=None, timeout=18):
+def http_json(url, method="GET", headers=None, data=None, form=None, timeout=18, retries=3):
     hdrs = {"User-Agent": UA}
     if headers:
         hdrs.update(headers)
@@ -65,9 +57,29 @@ def http_json(url, method="GET", headers=None, data=None, timeout=18):
     if data is not None:
         body = json.dumps(data).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")
-    req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    elif form is not None:
+        body = urllib.parse.urlencode(form).encode("utf-8")
+        hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
+
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code in (429, 500, 502, 503, 504) and attempt + 1 < retries:
+                time.sleep(1.2 * (2 ** attempt))
+                continue
+            raise
+        except Exception as e:
+            last_err = e
+            if attempt + 1 < retries:
+                time.sleep(1.0 * (2 ** attempt))
+                continue
+            raise
+    raise last_err
 
 
 def d1_query(sql, params=None):
@@ -81,6 +93,7 @@ def d1_query(sql, params=None):
         headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
         data=payload,
         timeout=30,
+        retries=3,
     )
     if not res.get("success"):
         raise RuntimeError(f"D1 query error: {res}")
@@ -104,28 +117,52 @@ def load_sync_settings():
         except Exception:
             return default
 
-    raw_junk = [w.strip().lower() for w in kv.get("junk_words", "").split(",") if w.strip()]
+    if "junk_words" in kv:
+        junk_words = tuple(w.strip().lower() for w in kv["junk_words"].split(",") if w.strip())
+    else:
+        junk_words = DEFAULT_JUNK_WORDS
+
+    try:
+        lrc_miss = json.loads(kv.get("sync_lrc_miss") or "{}")
+        if not isinstance(lrc_miss, dict):
+            lrc_miss = {}
+    except Exception:
+        lrc_miss = {}
+
     return {
         "enabled": str(kv.get("sync_enabled", "1")).strip() != "0",
         "lrc_limit": to_int("sync_lrc_limit", 450),
         "chart_max": to_int("sync_chart_max", 120),
-        "junk_words": tuple(raw_junk) if raw_junk else DEFAULT_JUNK_WORDS,
+        "junk_words": junk_words,
+        "lrc_miss": lrc_miss,
     }
 
 
 def norm_text(s):
-    s = (s or "").lower().strip()
-    s = re.sub(r"[\(（\[【].*?[\)）\]】]", "", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+    raw = (s or "").lower().strip()
+    stripped = re.sub(r"[\(（\[【].*?[\)）\]】]", "", raw)
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    return stripped or re.sub(r"[\(\)\[\]（）【】\s]+", " ", raw).strip()
+
+
+def norm_title_for_key(s):
+    raw = (s or "").lower().strip()
+    variants = []
+    for seg in re.findall(r"[\(（\[【]([^\)）\]】]+)[\)）\]】]", raw):
+        if re.search(r"(live|现场|演唱会|remix|dj|伴奏|纯音乐|钢琴|吉他|弹唱|翻唱|cover|加速|降调|清唱|night version)", seg, re.I):
+            variants.append(seg.strip())
+    base = norm_text(raw)
+    return re.sub(r"\s+", " ", (base + (" " + " ".join(variants) if variants else ""))).strip()
 
 
 def make_norm_key(title, artist):
-    first_artist = re.split(r"[/,、&]", artist or "")[0]
-    return f"{norm_text(title)}|{norm_text(first_artist)}"
+    first_artist = re.split(r"[/,、]|\s+&\s+", artist or "")[0]
+    return f"{norm_title_for_key(title)}|{norm_text(first_artist)}"
 
 
 def is_junk(title, junk_words):
+    if not junk_words:
+        return False
     t = (title or "").lower()
     return any(w in t for w in junk_words)
 
@@ -133,18 +170,15 @@ def is_junk(title, junk_words):
 def clean_lrc(raw):
     if not raw:
         return ""
-    lines = []
-    for line in raw.splitlines():
-        if any(k in line for k in ("作词 :", "作曲 :", "编曲 :", "制作人 :", "QQ音乐", "网易云")):
-            continue
-        lines.append(line)
+    bad_meta = ("作词 :", "作曲 :", "编曲 :", "制作人 :", "作词:", "作曲:", "作词：", "作曲：", "QQ音乐", "网易云")
+    lines = [line for line in raw.splitlines() if not any(k in line for k in bad_meta)]
     return "\n".join(lines).strip()
 
 
 def fetch_netease_lyric(song_id):
     try:
         url = f"https://music.163.com/api/song/lyric?id={song_id}&lv=-1&kv=-1&tv=-1"
-        data = http_json(url, headers=NE_HEADERS, timeout=8)
+        data = http_json(url, headers=NE_HEADERS, timeout=8, retries=2)
         lrc = clean_lrc((data.get("lrc") or {}).get("lyric", ""))
         trans = clean_lrc((data.get("tlyric") or {}).get("lyric", ""))
         return lrc, trans
@@ -154,51 +188,90 @@ def fetch_netease_lyric(song_id):
 
 def fetch_lrclib(title, artist):
     try:
-        clean_artist = re.split(r"[/,、&]", artist or "")[0].strip()
+        clean_artist = re.split(r"[/,、]|\s+&\s+", artist or "")[0].strip()
         qs = urllib.parse.urlencode({"track_name": norm_text(title), "artist_name": clean_artist})
-        data = http_json(f"https://lrclib.net/api/get?{qs}", timeout=8)
+        data = http_json(f"https://lrclib.net/api/get?{qs}", timeout=8, retries=1)
         return data.get("syncedLyrics") or data.get("plainLyrics") or ""
     except Exception:
         return ""
 
 
 def load_existing_state():
-    rows = d1_query(
-        "SELECT id, norm_key, source_ids_json, score, length(lyric_lrc) AS lrc_len FROM songs"
-    )
     state = {}
-    for r in rows:
-        state[r["norm_key"]] = {
-            "id": r["id"],
-            "source_ids": json.loads(r.get("source_ids_json") or "{}"),
-            "score": r.get("score") or 0,
-            "has_lrc": (r.get("lrc_len") or 0) > 10,
-        }
+    last_id = 0
+    while True:
+        rows = d1_query(
+            "SELECT id, norm_key, cover, duration, source_ids_json, score, length(lyric_lrc) AS lrc_len "
+            "FROM songs WHERE id > ? ORDER BY id ASC LIMIT 2000",
+            [last_id],
+        )
+        if not rows:
+            break
+        for r in rows:
+            last_id = r["id"]
+            state[r["norm_key"]] = {
+                "id": r["id"],
+                "cover": r.get("cover") or "",
+                "duration": r.get("duration") or 0,
+                "source_ids": json.loads(r.get("source_ids_json") or "{}"),
+                "score": r.get("score") or 0,
+                "has_lrc": (r.get("lrc_len") or 0) > 10,
+            }
+        if len(rows) < 2000:
+            break
     return state
+
+
+def hydrate_netease_tracks(pl, limit):
+    tracks = list(pl.get("tracks") or [])
+    track_ids = [x.get("id") for x in (pl.get("trackIds") or []) if x.get("id")]
+    if len(track_ids) > len(tracks) and len(tracks) < limit:
+        have = {str(t.get("id")) for t in tracks if t.get("id")}
+        missing = [tid for tid in track_ids[:limit] if str(tid) not in have]
+        for i in range(0, len(missing), 200):
+            chunk = missing[i : i + 200]
+            try:
+                sd = http_json(
+                    "https://music.163.com/api/v3/song/detail",
+                    method="POST",
+                    headers=NE_HEADERS,
+                    form={"c": json.dumps([{"id": tid} for tid in chunk])},
+                    timeout=12,
+                    retries=2,
+                )
+                for s in sd.get("songs") or []:
+                    if str(s.get("id")) not in have:
+                        have.add(str(s.get("id")))
+                        tracks.append(s)
+            except Exception as e:
+                print(f"  [Warn] hydrate song/detail failed: {e}")
+    return tracks
 
 
 def crawl_netease_charts(songs_map, charts_list, chart_max, junk_words):
     for cid, c_title, c_cat, song_cat, sort_order, default_limit in NETEASE_CHARTS:
         limit = min(default_limit, chart_max) if chart_max > 0 else default_limit
         print(f"Fetching Netease chart: {c_title} ({cid}, limit={limit})...")
-        time.sleep(1.0)
+        time.sleep(0.8)
         pl = {}
         for ep in (
             f"https://music.163.com/api/v6/playlist/detail?id={cid}&n={limit}",
             f"https://music.163.com/api/playlist/detail?id={cid}",
         ):
             try:
-                data = http_json(ep, headers=NE_HEADERS, timeout=15)
-                pl = data.get("playlist") or data.get("result") or {}
-                if pl.get("tracks"):
+                data = http_json(ep, headers=NE_HEADERS, timeout=15, retries=2)
+                cand = data.get("playlist") or data.get("result") or {}
+                if cand.get("tracks") or cand.get("trackIds"):
+                    pl = cand
                     break
             except Exception as e:
                 print(f"  [Warn] {ep} failed: {e}")
-                time.sleep(0.8)
+                time.sleep(0.6)
 
-        tracks = pl.get("tracks") or []
+        tracks = hydrate_netease_tracks(pl, limit) if pl else []
         print(f"  -> got {len(tracks)} tracks")
-        if not tracks:
+        if len(tracks) < 10:
+            print(f"  [Skip] chart {c_title} returned too few tracks ({len(tracks)}), preserving existing chart")
             continue
 
         keys = []
@@ -212,14 +285,17 @@ def crawl_netease_charts(songs_map, charts_list, chart_max, junk_words):
                 continue
             score = max(10, 1000 - idx * 5)
             nid = str(t["id"])
+            alb = t.get("al") or t.get("album") or {}
+            cov = (alb.get("picUrl") or "").replace("http://", "https://") if "music.126.net" in (alb.get("picUrl") or "") else (alb.get("picUrl") or "")
+            dur = round((t.get("dt") or t.get("duration") or 0) / 1000)
             if nk not in songs_map:
                 songs_map[nk] = {
                     "norm_key": nk,
                     "title": title,
                     "artist": artists,
-                    "album": (t.get("al") or t.get("album") or {}).get("name", ""),
-                    "cover": (t.get("al") or t.get("album") or {}).get("picUrl", ""),
-                    "duration": round((t.get("dt") or t.get("duration") or 0) / 1000),
+                    "album": alb.get("name", ""),
+                    "cover": cov,
+                    "duration": dur,
                     "category": song_cat,
                     "score": score,
                     "source_ids": {"netease": nid},
@@ -227,6 +303,10 @@ def crawl_netease_charts(songs_map, charts_list, chart_max, junk_words):
             else:
                 songs_map[nk]["source_ids"]["netease"] = nid
                 songs_map[nk]["score"] = max(songs_map[nk]["score"], score)
+                if not songs_map[nk]["cover"] and cov:
+                    songs_map[nk]["cover"] = cov
+                if songs_map[nk]["duration"] == 0 and dur > 0:
+                    songs_map[nk]["duration"] = dur
             if nk not in keys:
                 keys.append(nk)
 
@@ -247,13 +327,13 @@ def crawl_classic_evergreens(songs_map, charts_list, junk_words):
     print("Fetching Evergreen Classic Songs...")
     classic_keys = []
     first_cover = ""
-    for q in CLASSIC_QUERIES:
-        time.sleep(0.6)
+    for idx_q, q in enumerate(CLASSIC_QUERIES):
+        time.sleep(0.5)
         try:
-            qs = urllib.parse.urlencode({"s": q, "type": 1, "limit": 6, "offset": 0})
-            data = http_json(f"https://music.163.com/api/cloudsearch/pc?{qs}", headers=NE_HEADERS, timeout=12)
+            qs = urllib.parse.urlencode({"s": q, "type": 1, "limit": 4, "offset": 0})
+            data = http_json(f"https://music.163.com/api/cloudsearch/pc?{qs}", headers=NE_HEADERS, timeout=12, retries=2)
             songs = (data.get("result") or {}).get("songs") or []
-            for idx, t in enumerate(songs):
+            for idx, t in enumerate(songs[:2]):
                 title = (t.get("name") or "").strip()
                 if not title or is_junk(title, junk_words):
                     continue
@@ -273,7 +353,7 @@ def crawl_classic_evergreens(songs_map, charts_list, junk_words):
                         "cover": cov,
                         "duration": round((t.get("dt") or 0) / 1000),
                         "category": "经典",
-                        "score": 880 - idx * 10,
+                        "score": 880 - idx * 20 - idx_q,
                         "source_ids": {"netease": nid},
                     }
                 else:
@@ -301,8 +381,8 @@ def crawl_msr_official(songs_map, charts_list):
     print("Fetching Monster Siren (塞壬唱片) official library...")
     try:
         hdrs = {"Accept": "application/json", "Referer": "https://monster-siren.hypergryph.com/"}
-        albums = http_json("https://monster-siren.hypergryph.com/api/albums", headers=hdrs, timeout=20).get("data") or []
-        songs = (http_json("https://monster-siren.hypergryph.com/api/songs", headers=hdrs, timeout=20).get("data") or {}).get("list") or []
+        albums = http_json("https://monster-siren.hypergryph.com/api/albums", headers=hdrs, timeout=20, retries=2).get("data") or []
+        songs = (http_json("https://monster-siren.hypergryph.com/api/songs", headers=hdrs, timeout=20, retries=2).get("data") or {}).get("list") or []
         album_map = {a["cid"]: a for a in albums}
         top_keys = []
         for idx, s in enumerate(songs):
@@ -342,6 +422,37 @@ def crawl_msr_official(songs_map, charts_list):
         print(f"  [Warn] MSR failed: {e}")
 
 
+def batch_update_meta(rows, now):
+    for i in range(0, len(rows), 5):
+        batch = rows[i : i + 5]
+        ids = [u["id"] for u in batch]
+        ph = ",".join(["?"] * len(ids))
+        case_sids = " ".join(["WHEN ? THEN ?"] * len(batch))
+        case_score = " ".join(["WHEN ? THEN ?"] * len(batch))
+        case_cov = " ".join(["WHEN ? THEN ?"] * len(batch))
+        case_dur = " ".join(["WHEN ? THEN ?"] * len(batch))
+        params = []
+        for u in batch:
+            params.extend([u["id"], u["source_ids_json"]])
+        for u in batch:
+            params.extend([u["id"], u["score"]])
+        for u in batch:
+            params.extend([u["id"], u["cover"]])
+        for u in batch:
+            params.extend([u["id"], u["duration"]])
+        params.append(now)
+        params.extend(ids)
+        d1_query(
+            f"UPDATE songs SET "
+            f"source_ids_json = CASE id {case_sids} ELSE source_ids_json END, "
+            f"score = CASE id {case_score} ELSE score END, "
+            f"cover = CASE id {case_cov} ELSE cover END, "
+            f"duration = CASE id {case_dur} ELSE duration END, "
+            f"updated_at = ? WHERE id IN ({ph})",
+            params,
+        )
+
+
 def main():
     cfg = load_sync_settings()
     if not cfg["enabled"]:
@@ -353,7 +464,9 @@ def main():
     lrc_limit = cfg["lrc_limit"]
     chart_max = cfg["chart_max"]
     junk_words = cfg["junk_words"]
-    print(f"Sync config -> enabled=1, lrc_limit={lrc_limit}, chart_max={chart_max}")
+    now = int(time.time())
+    lrc_miss = {k: int(v) for k, v in cfg["lrc_miss"].items() if now - int(v) < LRC_MISS_TTL_SEC}
+    print(f"Sync config -> enabled=1, lrc_limit={lrc_limit}, chart_max={chart_max}, lrc_miss_cache={len(lrc_miss)}")
 
     existing = load_existing_state()
     print(f"Existing songs in D1: {len(existing)}")
@@ -364,46 +477,59 @@ def main():
     crawl_classic_evergreens(songs_map, charts_list, junk_words)
     crawl_msr_official(songs_map, charts_list)
 
-    now = int(time.time())
     to_insert = []
-    to_update = []
-    lrc_fetched = 0
+    to_update_meta = []
+    to_update_lrc = []
+    lrc_attempts = 0
+    lrc_success = 0
 
     for nk, item in songs_map.items():
         old = existing.get(nk)
         if not old:
             lrc, trans = "", ""
-            if lrc_fetched < lrc_limit:
+            if lrc_attempts < lrc_limit:
                 if "netease" in item["source_ids"]:
                     lrc, trans = fetch_netease_lyric(item["source_ids"]["netease"])
                 if not lrc:
                     lrc = fetch_lrclib(item["title"], item["artist"])
-                lrc_fetched += 1
+                lrc_attempts += 1
+                if lrc:
+                    lrc_success += 1
             to_insert.append({**item, "lyric_lrc": lrc, "lyric_trans": trans})
         else:
             merged_ids = {**old["source_ids"], **item["source_ids"]}
             ids_changed = merged_ids != old["source_ids"]
-            score_changed = abs(item["score"] - old["score"]) >= 50
-            need_lrc = (not old["has_lrc"]) and lrc_fetched < lrc_limit
-            if ids_changed or score_changed or need_lrc:
-                lrc, trans = "", ""
-                if need_lrc:
-                    if "netease" in merged_ids:
-                        lrc, trans = fetch_netease_lyric(merged_ids["netease"])
-                    if not lrc:
-                        lrc = fetch_lrclib(item["title"], item["artist"])
-                    lrc_fetched += 1
-                to_update.append(
+            score_changed = abs(item["score"] - old["score"]) >= 100
+            cover_repair = (not old["cover"]) and bool(item["cover"])
+            dur_repair = (old["duration"] == 0) and (item["duration"] > 0)
+            miss_active = str(old["id"]) in lrc_miss
+            need_lrc = (not old["has_lrc"]) and (not miss_active) and (lrc_attempts < lrc_limit)
+
+            lrc, trans = "", ""
+            if need_lrc:
+                if "netease" in merged_ids:
+                    lrc, trans = fetch_netease_lyric(merged_ids["netease"])
+                if not lrc:
+                    lrc = fetch_lrclib(item["title"], item["artist"])
+                lrc_attempts += 1
+                if lrc:
+                    lrc_success += 1
+                    to_update_lrc.append({"id": old["id"], "lyric_lrc": lrc, "lyric_trans": trans})
+                else:
+                    lrc_miss[str(old["id"])] = now
+
+            if ids_changed or score_changed or cover_repair or dur_repair:
+                to_update_meta.append(
                     {
                         "id": old["id"],
                         "source_ids_json": json.dumps(merged_ids, ensure_ascii=False),
-                        "score": item["score"],
-                        "lyric_lrc": lrc,
-                        "lyric_trans": trans,
+                        "score": max(old["score"], item["score"]) if not score_changed else item["score"],
+                        "cover": item["cover"] if cover_repair else old["cover"],
+                        "duration": item["duration"] if dur_repair else old["duration"],
                     }
                 )
 
-    print(f"Delta -> Insert: {len(to_insert)}, Update: {len(to_update)}, Lyrics fetched: {lrc_fetched}")
+    print(f"Delta -> Insert: {len(to_insert)}, UpdateMeta: {len(to_update_meta)}, UpdateLrc: {len(to_update_lrc)}, LrcTries: {lrc_attempts}")
 
     for i in range(0, len(to_insert), 5):
         batch = to_insert[i : i + 5]
@@ -426,23 +552,23 @@ def main():
             params,
         )
 
-    for u in to_update:
-        if u["lyric_lrc"]:
-            d1_query(
-                "UPDATE songs SET source_ids_json=?, score=?, lyric_lrc=?, lyric_trans=?, updated_at=? WHERE id=?",
-                [u["source_ids_json"], u["score"], u["lyric_lrc"], u["lyric_trans"], now, u["id"]],
-            )
-        else:
-            d1_query(
-                "UPDATE songs SET source_ids_json=?, score=?, updated_at=? WHERE id=?",
-                [u["source_ids_json"], u["score"], now, u["id"]],
-            )
+    if to_update_meta:
+        batch_update_meta(to_update_meta, now)
 
+    for u in to_update_lrc:
+        d1_query(
+            "UPDATE songs SET lyric_lrc=?, lyric_trans=?, updated_at=? WHERE id=?",
+            [u["lyric_lrc"], u["lyric_trans"], now, u["id"]],
+        )
+
+    nk_to_id = {nk: info["id"] for nk, info in existing.items()}
     if to_insert:
-        id_rows = d1_query("SELECT id, norm_key FROM songs")
-        nk_to_id = {r["norm_key"]: r["id"] for r in id_rows}
-    else:
-        nk_to_id = {nk: info["id"] for nk, info in existing.items()}
+        new_nks = [s["norm_key"] for s in to_insert]
+        for i in range(0, len(new_nks), 60):
+            chunk = new_nks[i : i + 60]
+            ph = ",".join(["?"] * len(chunk))
+            for r in d1_query(f"SELECT id, norm_key FROM songs WHERE norm_key IN ({ph})", chunk):
+                nk_to_id[r["norm_key"]] = r["id"]
 
     synced_charts = 0
     for ch in charts_list:
@@ -460,7 +586,12 @@ def main():
         )
         synced_charts += 1
 
-    summary = f"榜单 {synced_charts} 个 · 新增 {len(to_insert)} 首 · 更新 {len(to_update)} 首 · 补歌词 {lrc_fetched} 首"
+    if len(lrc_miss) > 3000:
+        trimmed = sorted(lrc_miss.items(), key=lambda x: x[1], reverse=True)[:3000]
+        lrc_miss = dict(trimmed)
+    set_setting("sync_lrc_miss", json.dumps(lrc_miss))
+
+    summary = f"榜单 {synced_charts} 个 · 新增 {len(to_insert)} 首 · 更新 {len(to_update_meta)} 首 · 补歌词 {lrc_success}/{lrc_attempts} 首"
     set_setting("last_sync_at", now)
     set_setting("last_sync_summary", summary)
     print("Sync completed:", summary)
