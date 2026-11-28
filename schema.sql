@@ -98,4 +98,10 @@ INSERT OR IGNORE INTO sources (id, name, type, endpoint, priority, enabled) VALU
 
 INSERT OR IGNORE INTO settings (key, value) VALUES
   ('junk_words', 'dj版,dj舞曲,伴奏,喊麦,铃声,广场舞,卡拉ok,消音版,片段,高潮版,0.8x,1.2x'),
-  ('player_debug', '0');
+  ('player_debug', '0'),
+  ('sub_mode', 'fusion'),
+  ('resolve_timeout_ms', '12000'),
+  ('source_stats', '{}'),
+  ('sync_enabled', '1'),
+  ('sync_lrc_limit', '450'),
+  ('sync_chart_max', '120');
