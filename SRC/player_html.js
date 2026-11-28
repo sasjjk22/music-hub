@@ -1014,7 +1014,7 @@ function fetchDirectGD(s, plat, label, seq) {
   var base = "https://music-api.gdstudio.xyz/api.php?use_xbridge3=true&types=";
   var p = (plat === "netease" && s.ext_source === "netease" && s.ext_id)
     ? Promise.resolve(s.ext_id)
-    : fetch(base + "search&source=" + plat + "&name=" + encodeURIComponent(kw) + "&count=5&pages=1")
+    : fetch(base + "search&source=" + plat + "&name=" + encodeURIComponent(kw) + "&count=6&pages=1")
         .then(function(r) { return r.json(); })
         .then(function(arr) {
           if (!Array.isArray(arr) || !arr.length) return "";
@@ -1023,7 +1023,7 @@ function fetchDirectGD(s, plat, label, seq) {
             var sc = scoreMatchLocal(arr[i].name, arr[i].artist, s.title, s.artist, 0, s.duration);
             if (sc > bsc) { bsc = sc; best = arr[i]; }
           }
-          return (best && bsc > -60 && best.id) ? String(best.id) : "";
+          return (best && bsc >= 20 && best.id) ? String(best.id) : "";
         });
 
   p.then(function(pid) {
@@ -1032,7 +1032,7 @@ function fetchDirectGD(s, plat, label, seq) {
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (!d || !d.url || seq !== playSeq) return;
-        if (d.size && s.duration >= 90 && Number(d.size) < Math.max(1300, s.duration * 11)) return;
+        if (d.size && s.duration >= 90 && Number(d.size) < Math.max(1150, s.duration * 6)) return;
         addCandidate(seq, { label: label + (d.br ? "(" + d.br + "k)" : ""), url: d.url, isTrial: false });
       });
   }).catch(function(){});
@@ -1041,15 +1041,17 @@ function fetchDirectGD(s, plat, label, seq) {
 function fetchDirectVKeys(s, seq) {
   var cleanArtist = (s.artist || "").split(/[/,、&]/)[0].trim();
   var kw = (normStrLocal(s.title) + " " + cleanArtist).trim();
-  fetch("https://api.vkeys.cn/v2/music/tencent?word=" + encodeURIComponent(kw) + "&n=1&quality=3")
-    .then(function(r) { return r.json(); })
-    .then(function(res) {
-      if (seq !== playSeq) return;
-      var d = res && res.data;
-      if (!d || !d.url) return;
-      if (scoreMatchLocal(d.song || s.title, d.singer || s.artist, s.title, s.artist, 0, s.duration) <= -60) return;
-      addCandidate(seq, { label: "QQ(直连)", url: d.url, isTrial: false });
-    }).catch(function(){});
+  ["https://api.vkeys.cn/v2/music", "https://luoyue-api-cf.vincentzyu233.cn/v2/music"].forEach(function(base, idx) {
+    fetch(base + "/tencent?word=" + encodeURIComponent(kw) + "&n=1&quality=3")
+      .then(function(r) { return r.json(); })
+      .then(function(res) {
+        if (seq !== playSeq) return;
+        var d = res && res.data;
+        if (!d || !d.url || d.ekey) return;
+        if (scoreMatchLocal(d.song || s.title, d.singer || s.artist, s.title, s.artist, 0, s.duration) < 15) return;
+        addCandidate(seq, { label: idx === 0 ? "QQ(直连)" : "落月(直连)", url: d.url, isTrial: false });
+      }).catch(function(){});
+  });
 }
 
 function recordHistory(s) {
