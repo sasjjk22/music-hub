@@ -89,9 +89,13 @@ module.exports = {
         timeout: 8000,
       }
     );
-    const list = data?.data?.result || [];
+    const rawList = data?.data?.result || [];
+    const list = rawList.filter((item) => {
+      const title = stripTags(item.title).toLowerCase();
+      return !["翻唱", "cover", "吉他", "钢琴", "弹唱", "教学", "伴奏", "二创"].some((w) => title.includes(w));
+    });
     return {
-      isEnd: list.length < 20,
+      isEnd: rawList.length < 20,
       data: list.map((item) => ({
         id: item.bvid,
         bvid: item.bvid,

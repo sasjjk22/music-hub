@@ -17,6 +17,11 @@ const JUNK_WORDS = [
   "纯音乐版",
   "卡拉ok",
   "消音版",
+  "翻唱",
+  "cover",
+  "吉他版",
+  "钢琴版",
+  "弹唱",
 ];
 
 const NETEASE_TOPLISTS = [
