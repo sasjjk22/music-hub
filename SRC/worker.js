@@ -355,7 +355,7 @@ async function verifyNot30sTrial(url, durationSec, extraHeaders = {}, minBitrate
     const res = await fetchTimeout(url, { method: "GET", headers: { Range: "bytes=0-0", "User-Agent": UA, ...extraHeaders }, redirect: "follow" }, 2800);
     if (res.body) res.body.cancel().catch(() => {});
     if (res.url && (res.url.includes("/404") || res.url.includes("panspace.kuwo.cn"))) { pushDebugTrace(trace, "probe:404_url"); return null; }
-    if (res.status === 404 || res.status === 410) { pushDebugTrace(trace, `probe:http_${res.status}`); return null; }
+    if (res.status >= 400) { pushDebugTrace(trace, `probe:http_${res.status}`); return null; }
     if (res.status === 200 || res.status === 206) {
       const ct = (res.headers.get("content-type") || "").toLowerCase();
       if (ct.includes("text/html") || ct.includes("application/json")) { pushDebugTrace(trace, `probe:bad_ct_${ct.slice(0, 24)}`); return null; }
@@ -540,14 +540,37 @@ async function liveSearchGdSongsWithMeta(query, limit = 30, page = 1, junkList =
         title,
         artist: artist || "未知歌手",
         album,
-        cover: item.pic_id ? `${base}&types=pic&source=${encodeURIComponent(source)}&id=${encodeURIComponent(item.pic_id)}&size=500` : "",
+        cover: "",
         duration: Number(item.duration || 0),
         category: "全网搜索",
-        source_ids_json: "{}",
+        source_ids_json: source === "netease" && /^\d+$/.test(id) ? JSON.stringify({ netease: id }) : "{}",
         ext_source: source,
         ext_id: id,
       });
     }
+  }
+  // 用 1 次网易云批量接口补全直连封面(music.126.net)与时长，绝不发几十个 GDStudio types=pic 请求打触发 503
+  const neIds = out.filter((x) => x.ext_source === "netease" && /^\d+$/.test(x.ext_id)).slice(0, 30).map((x) => ({ id: Number(x.ext_id) }));
+  if (neIds.length) {
+    try {
+      const dr = await fetchTimeout("https://music.163.com/api/v3/song/detail", {
+        method: "POST",
+        headers: { ...NE_HEADERS, "Content-Type": "application/x-www-form-urlencoded" },
+        body: "c=" + encodeURIComponent(JSON.stringify(neIds)),
+      }, 2800);
+      if (dr.ok) {
+        const dJson = await dr.json();
+        const detailMap = new Map((dJson?.songs || []).map((s) => [String(s.id), mapNeteaseSong(s)]));
+        for (const item of out) {
+          const m = detailMap.get(String(item.ext_id));
+          if (m) {
+            if (!item.cover && m.cover) item.cover = m.cover;
+            if (!item.duration && m.duration) item.duration = m.duration;
+            if (!item.album && m.album) item.album = m.album;
+          }
+        }
+      }
+    } catch (_) {}
   }
   return { songs: out, rawCount };
 }
@@ -1579,7 +1602,7 @@ async function signBiliWbi(params, imgKey, subKey) {
 }
 
 async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.bilibili.com", junkWords = DEFAULT_JUNK_WORDS, reqMs = 4500) {
-  if (!ids.bili && isStrictSong(song)) { trace.push("bili:strict_song_skip"); return null; }
+  const strict = isStrictSong(song);
   try {
     const base = biliBase.replace(/\/$/, "");
     const auth = await getBiliAuth(base);
@@ -1611,12 +1634,12 @@ async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.b
         const p = String(it.duration || "").split(":").map(Number);
         const d = p.length === 2 ? p[0] * 60 + p[1] : (p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : 0);
         if (d < 30 || d > 600) continue;
-        let sc = scoreCandidate(rawT, rawT + " " + (it.author || ""), song.title, song.artist, d, song.duration, junkWords);
+        let sc = scoreCandidate(rawT, rawT + " " + (it.author || ""), song.title, song.artist, d, song.duration, junkWords);let sc = scoreCandidate(rawT, rawT + " " + (it.author || ""), song.title, song.artist, d, song.duration, junkWords, false);
         if (noise.some((nw) => rawT.toLowerCase().includes(nw) && !song.title.toLowerCase().includes(nw))) continue;
         if (rawT.toLowerCase().includes("mv") || rawT.toLowerCase().includes("官方") || rawT.toLowerCase().includes("原版")) sc += 25;
         if (sc > bsc) { bsc = sc; best = it; }
       }
-      if (!best || bsc < 10) { trace.push("bili:mismatch"); return null; }
+      if (!best || bsc < (strict ? 55 : 10)) { trace.push("bili:mismatch"); return null; }
       bvid = best.bvid;
     }
 
@@ -1938,7 +1961,7 @@ async function resolveAllPlayUrls(song, quality, env, debugMode = false) {
   jobs.push(runSingle("kugou", isEnabled("kugou"), (st) => raceBakaKugou(song, st, srcMap.get("kugou")?.endpoint || "https://api.baka.plus/meting/", cfg.junkWords, reqMs)));
   jobs.push(runSingle("migu", isEnabled("migu"), (st) => raceMigu(song, ids, st, srcMap.get("migu")?.endpoint || MIGU_DEFAULT_BASE, 4200, cfg.junkWords)));
   if (tier <= 2 && ids.netease) jobs.push(runSingle("meting", isEnabled("meting"), (st) => raceMeting(srcMap.get("meting")?.endpoint || "https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, st, 2500)));
-  if (!strictIdentity || ids.bili) jobs.push(runSingle("bili", isEnabled("bili"), (st) => fallbackBilibiliAudio(song, ids, st, srcMap.get("bili")?.endpoint || "https://api.bilibili.com", cfg.junkWords, 4500)));
+  jobs.push(runSingle("bili", isEnabled("bili"), (st) => fallbackBilibiliAudio(song, ids, st, srcMap.get("bili")?.endpoint || "https://api.bilibili.com", cfg.junkWords, 4500)));
 
   await Promise.allSettled(jobs);
   return { sources: hits, tier, debugSources };
