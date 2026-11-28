@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS sources (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  type TEXT NOT NULL,          -- 'agg' | 'vkeys' | 'native' | 'bili'
+  type TEXT NOT NULL,          -- 'agg' | 'vkeys' | 'native' | 'bili' | 'migu' | 'kuwo' | 'kugou' | 'meting'
   endpoint TEXT DEFAULT '',
   priority INTEGER DEFAULT 10,
   enabled INTEGER DEFAULT 1,
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS sources (
 -- 2. 歌曲永久元数据表（绝不存会过期的直链）
 CREATE TABLE IF NOT EXISTS songs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  norm_key TEXT NOT NULL UNIQUE,   -- 标准化歌名|标准化歌手
+  norm_key TEXT NOT NULL UNIQUE,   -- 标准化歌名|标准化歌手（含关键版本标记）
   title TEXT NOT NULL,
   artist TEXT NOT NULL,
   album TEXT DEFAULT '',
@@ -87,10 +87,15 @@ CREATE TABLE IF NOT EXISTS shares (
 );
 
 INSERT OR IGNORE INTO sources (id, name, type, endpoint, priority, enabled) VALUES
-  ('gdstudio', 'GDStudio 聚合解析', 'agg', 'https://music-api.gdstudio.xyz/api.php', 10, 1),
   ('msr', '塞壬唱片官方直连', 'native', 'https://monster-siren.hypergryph.com/api', 5, 1),
-  ('bili', 'B站 WBI 音频流兜底', 'bili', 'https://api.bilibili.com', 90, 1),
-  ('migu', '咪咕音乐官方解析', 'migu', 'https://app.c.nf.migu.cn', 15, 1);
+  ('kuwo', '酷我官方/移动端直连', 'kuwo', 'https://mobi.kuwo.cn', 8, 1),
+  ('gdstudio', 'GDStudio 聚合解析', 'agg', 'https://music-api.gdstudio.xyz/api.php', 10, 1),
+  ('vkeys', 'VKeys / 落月 QQ解析', 'vkeys', 'https://api.vkeys.cn/v2/music', 12, 1),
+  ('migu', '咪咕音乐官方解析', 'migu', 'https://app.c.nf.migu.cn', 15, 1),
+  ('kugou', '酷狗 / Baka Meting', 'kugou', 'https://api.baka.plus/meting/', 20, 1),
+  ('meting', 'Injahow Meting (Lv1-2)', 'meting', 'https://api.injahow.cn/meting/', 30, 1),
+  ('bili', 'B站 WBI 音频流兜底', 'bili', 'https://api.bilibili.com', 90, 1);
 
 INSERT OR IGNORE INTO settings (key, value) VALUES
-  ('junk_words', 'dj版,dj舞曲,伴奏,喊麦,铃声,广场舞,卡拉ok,消音版');
+  ('junk_words', 'dj版,dj舞曲,伴奏,喊麦,铃声,广场舞,卡拉ok,消音版,片段,高潮版,0.8x,1.2x'),
+  ('player_debug', '0');
