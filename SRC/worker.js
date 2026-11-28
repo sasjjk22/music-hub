@@ -330,9 +330,24 @@ function isJunkTitle(title, query = "", junkList = DEFAULT_JUNK_WORDS) {
   return junkList.some((w) => t.includes(w) && !q.includes(w));
 }
 
+function decodeBase64Utf8(b64) {
+  const bin = atob(String(b64 || "").replace(/\s+/g, ""));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+function isSyncedLrc(raw) {
+  return /^\s*\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]/m.test(String(raw || ""));
+}
 function cleanLrcText(raw) {
   if (!raw) return "";
-  return raw.split(/\r?\n/).filter((l) => !["作词 :", "作曲 :", "编曲 :", "制作人 :", "作词:", "作曲:", "QQ音乐", "网易云"].some((k) => l.includes(k))).join("\n").trim();
+  return String(raw)
+    .replace(/^\uFEFF/, "")
+    .replace(/\[(\d{1,3}:\d{2}):(\d{1,3})\]/g, "[$1.$2]")
+    .split(/\r?\n/)
+    .filter((l) => !["作词 :", "作曲 :", "编曲 :", "制作人 :", "作词:", "作曲:", "作词：", "作曲：", "QQ音乐", "网易云"].some((k) => l.includes(k)))
+    .join("\n")
+    .trim();
 }
 function isBasicAudioUrl(u) {
   return Boolean(u && typeof u === "string" && u.startsWith("http") && !u.includes("panspace.kuwo.cn") && !u.includes("/404"));
@@ -2117,25 +2132,133 @@ async function runSongResolveDebug(body, env) {
   return output;
 }
 
-async function fetchLiveLyric(extSource, extId, title, artist) {
-  if (extSource === "netease" && extId) {
-    try {
-      const d = await (await fetchTimeout(`https://music.163.com/api/song/lyric?id=${extId}&lv=-1&kv=-1&tv=-1`, { headers: NE_HEADERS }, 3500)).json();
-      const lrc = cleanLrcText(d?.lrc?.lyric || ""), trans = cleanLrcText(d?.tlyric?.lyric || "");
-      if (lrc) return { lrc, trans };
-    } catch {}
+async function fetchLiveLyric(extSource, extId, title, artist, durationSec = 0, ids = {}) {
+  const cleanTitle = String(title || "").trim();
+  const cleanArtist = splitFirstArtist(artist || "");
+  const kw = `${normalizeName(cleanTitle)} ${cleanArtist}`.trim();
+  const neId = ids.netease || (extSource === "netease" ? extId : "");
+  const msrId = ids.msr || (extSource === "msr" ? extId : "");
+  const candidates = [];
+
+  const pushLrc = (source, lrc, trans = "") => {
+    const cLrc = cleanLrcText(lrc);
+    const cTrans = cleanLrcText(trans);
+    if (!cLrc || cLrc.length <= 10) return;
+    let rank = 1;
+    if (isSyncedLrc(cLrc)) rank = cTrans ? 4 : 3;
+    else if (cTrans) rank = 2;
+    candidates.push({ source, lrc: cLrc, trans: cTrans, rank });
+  };
+
+  const tasks = [];
+
+  // 1. 塞壬唱片官方歌词
+  if (msrId) {
+    tasks.push((async () => {
+      const lrcUrl = (await (await fetchTimeout(`https://monster-siren.hypergryph.com/api/song/${msrId}`, {}, 3000)).json())?.data?.lyricUrl;
+      if (lrcUrl) pushLrc("msr", await (await fetchTimeout(lrcUrl, {}, 3000)).text());
+    })().catch(() => {}));
   }
-  if (extSource === "msr" && extId) {
-    try {
-      const lrcUrl = (await (await fetchTimeout(`https://monster-siren.hypergryph.com/api/song/${extId}`, {}, 3500)).json())?.data?.lyricUrl;
-      if (lrcUrl) { const txt = cleanLrcText(await (await fetchTimeout(lrcUrl, {}, 3500)).text()); if (txt) return { lrc: txt, trans: "" }; }
-    } catch {}
+
+  // 2. 网易云官方歌词（无 ID 时自动先搜一遍网易云）
+  tasks.push((async () => {
+    let targetId = /^\d+$/.test(String(neId || "")) ? String(neId) : "";
+    if (!targetId && cleanTitle) {
+      const found = await liveSearchSongs(kw || cleanTitle, 5, 1, DEFAULT_JUNK_WORDS).catch(() => []);
+      let best = null, bsc = -100;
+      for (const s of found) {
+        const sc = scoreCandidate(s.title, s.artist, cleanTitle, artist, s.duration, durationSec, DEFAULT_JUNK_WORDS, false, s.album);
+        if (sc > bsc) { bsc = sc; best = s; }
+      }
+      if (best && bsc >= 20 && best.ext_id) targetId = String(best.ext_id);
+    }
+    if (!targetId) return;
+    const d = await (await fetchTimeout(`https://music.163.com/api/song/lyric?id=${targetId}&lv=-1&kv=-1&tv=-1`, { headers: NE_HEADERS }, 3200)).json();
+    if (d?.lrc?.lyric) pushLrc("netease", d.lrc.lyric, d.tlyric?.lyric || "");
+  })().catch(() => {}));
+
+  // 3. GDStudio 歌词接口
+  if (["netease", "joox", "kugou"].includes(extSource) && extId) {
+    tasks.push((async () => {
+      const d = await (await fetchTimeout(`https://music-api.gdstudio.xyz/api.php?use_xbridge3=true&types=lyric&source=${encodeURIComponent(extSource)}&id=${encodeURIComponent(extId)}`, { headers: { "User-Agent": UA, Referer: "https://music.gdstudio.xyz/" } }, 3200)).json();
+      if (d?.lyric) pushLrc(`gd:${extSource}`, d.lyric, d.tlyric || "");
+    })().catch(() => {}));
   }
-  try {
-    const r = await fetchTimeout(`https://lrclib.net/api/get?track_name=${encodeURIComponent(normalizeName(title))}&artist_name=${encodeURIComponent(splitFirstArtist(artist || ""))}`, {}, 3500);
-    if (r.ok) { const d = await r.json(); const txt = d?.syncedLyrics || d?.plainLyrics || ""; if (txt) return { lrc: txt, trans: "" }; }
-  } catch {}
-  return { lrc: "", trans: "" };
+
+  // 4. 酷狗官方歌词（支持逐行时间轴）
+  if (cleanTitle) {
+    tasks.push((async () => {
+      const sr = await fetchTimeout(`http://msearchcdn.kugou.com/api/v3/search/song?keyword=${encodeURIComponent(kw || cleanTitle)}&page=1&pagesize=5`, { headers: { "User-Agent": UA } }, 3000);
+      if (!sr.ok) return;
+      const list = (await sr.json())?.data?.info || [];
+      let best = null, bsc = -100;
+      for (const it of list) {
+        const sc = scoreCandidate(it.songname, it.singername, cleanTitle, artist, it.duration, durationSec, DEFAULT_JUNK_WORDS, false, it.album_name || "");
+        if (sc > bsc) { bsc = sc; best = it; }
+      }
+      if (!best || bsc < 15) return;
+      const durMs = Math.max(0, Number(best.duration || durationSec || 0) * 1000);
+      const ks = await (await fetchTimeout(`https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword=${encodeURIComponent(kw || cleanTitle)}&duration=${durMs}&hash=${encodeURIComponent(best.hash || "")}`, { headers: { "User-Agent": UA } }, 3000)).json();
+      const cand = ks?.candidates?.[0];
+      if (!cand?.id || !cand?.accesskey) return;
+      const dl = await (await fetchTimeout(`https://lyrics.kugou.com/download?ver=1&client=pc&id=${encodeURIComponent(cand.id)}&accesskey=${encodeURIComponent(cand.accesskey)}&fmt=lrc&charset=utf8`, { headers: { "User-Agent": UA } }, 3000)).json();
+      if (dl?.content) pushLrc("kugou", decodeBase64Utf8(dl.content));
+    })().catch(() => {}));
+  }
+
+  // 5. 酷我官方歌词
+  if (cleanTitle) {
+    tasks.push((async () => {
+      const rids = await searchKuwoRids(kw || cleanTitle, { title: cleanTitle, artist, duration: durationSec }, DEFAULT_JUNK_WORDS, 2800, 1).catch(() => []);
+      if (!rids.length) return;
+      const lr = await (await fetchTimeout(`https://m.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${rids[0]}`, { headers: { "User-Agent": UA } }, 2800)).json();
+      const list = lr?.data?.lrclist;
+      if (!Array.isArray(list) || !list.length) return;
+      const lrc = list.map((row) => {
+        const t = Number(row.time || 0);
+        const m = String(Math.floor(t / 60)).padStart(2, "0");
+        const s = (t % 60).toFixed(2).padStart(5, "0");
+        return `[${m}:${s}]${row.lineLyric || ""}`;
+      }).join("\n");
+      pushLrc("kuwo", lrc);
+    })().catch(() => {}));
+  }
+
+  // 6. VKeys / QQ 音乐歌词
+  if (cleanTitle) {
+    tasks.push((async () => {
+      const sr = await fetchTimeout(`https://api.vkeys.cn/v2/music/tencent?word=${encodeURIComponent(kw || cleanTitle)}&n=1`, { headers: { "User-Agent": UA } }, 2800);
+      if (!sr.ok) return;
+      const d = (await sr.json())?.data;
+      const mid = d?.mid || d?.id;
+      if (!mid) return;
+      if (scoreCandidate(d.song || cleanTitle, d.singer || artist, cleanTitle, artist, parseCnInterval(d.interval), durationSec, DEFAULT_JUNK_WORDS, false) < 15) return;
+      const lr = await (await fetchTimeout(`https://api.vkeys.cn/v2/music/tencent/lyric?mid=${encodeURIComponent(mid)}`, { headers: { "User-Agent": UA } }, 2800)).json();
+      if (lr?.data?.lrc) pushLrc("vkeys:qq", lr.data.lrc, lr.data.trans || "");
+    })().catch(() => {}));
+  }
+
+  // 7. LRCLIB 兜底
+  if (cleanTitle) {
+    tasks.push((async () => {
+      const r = await fetchTimeout(`https://lrclib.net/api/get?track_name=${encodeURIComponent(normalizeName(cleanTitle))}&artist_name=${encodeURIComponent(cleanArtist)}`, {}, 2800);
+      if (r.ok) {
+        const d = await r.json();
+        const txt = d?.syncedLyrics || d?.plainLyrics || "";
+        if (txt) { pushLrc("lrclib", txt); return; }
+      }
+      const sr = await fetchTimeout(`https://lrclib.net/api/search?q=${encodeURIComponent(kw || cleanTitle)}`, {}, 2800);
+      if (sr.ok) {
+        const arr = await sr.json();
+        if (Array.isArray(arr) && arr[0]) pushLrc("lrclib", arr[0].syncedLyrics || arr[0].plainLyrics || "");
+      }
+    })().catch(() => {}));
+  }
+
+  await raceWithDeadline(Promise.allSettled(tasks), 3800).catch(() => {});
+  if (!candidates.length) return { lrc: "", trans: "", source: "" };
+  candidates.sort((a, b) => b.rank - a.rank);
+  return candidates[0];
 }
 
 function isSafeExternalUrl(raw) {
@@ -2695,28 +2818,48 @@ export default {
       }
 
       if (path === "/api/song") {
-        const rawId = url.searchParams.get("id") || "", id = /^\d+$/.test(rawId) ? Number(rawId) : 0;
-        const extSrc = url.searchParams.get("ext_source") || "", extId = url.searchParams.get("ext_id") || "";
-        if (id > 0) {
-          const song = await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first();
-          if (song) {
-            if (!song.lyric_lrc) {
-              const ids = JSON.parse(song.source_ids_json || "{}");
-              const live = await fetchLiveLyric(ids.netease ? "netease" : ids.msr ? "msr" : "", ids.netease || ids.msr || "", song.title, song.artist);
-              if (live.lrc) { song.lyric_lrc = live.lrc; song.lyric_trans = live.trans; ctx.waitUntil(env.DB.prepare("UPDATE songs SET lyric_lrc = ?, lyric_trans = ? WHERE id = ?").bind(live.lrc, live.trans, id).run()); }
-            }
-            return json({ song: { ...song, cover: httpsCover(song.cover) } });
-          }
-        }
+        const rawId = url.searchParams.get("id") || "", extSrc = (url.searchParams.get("ext_source") || "").trim().toLowerCase(), extId = (url.searchParams.get("ext_id") || "").trim();
+        let id = /^\d+$/.test(rawId) ? Number(rawId) : 0;
+        const title = (url.searchParams.get("title") || "").trim(), artist = (url.searchParams.get("artist") || "").trim();
+
         if (url.searchParams.get("meta") === "1" && extSrc === "netease" && /^\d+$/.test(extId)) {
           try {
             const meta = await fetchNeteaseDebugMetadata(extId, 4500);
-            const live = await fetchLiveLyric("netease", extId, meta.title, meta.artist);
+            const live = await fetchLiveLyric("netease", extId, meta.title, meta.artist, meta.duration, { netease: extId });
             return json({ song: { id: 0, norm_key: makeNormKey(meta.title, meta.artist), ...meta, ext_source: "netease", ext_id: extId, lyric_lrc: live.lrc, lyric_trans: live.trans } });
           } catch {}
         }
-        const live = await fetchLiveLyric(extSrc, extId, url.searchParams.get("title") || "", url.searchParams.get("artist") || "");
-        return json({ song: { id: 0, lyric_lrc: live.lrc, lyric_trans: live.trans } });
+
+        let song = id > 0 ? await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first() : null;
+        if (!song && title) {
+          const nk = makeNormKey(title, artist);
+          song = await env.DB.prepare("SELECT * FROM songs WHERE norm_key = ?").bind(nk).first();
+          if (!song) {
+            const initIds = extSrc && extId ? JSON.stringify({ [extSrc]: extId }) : "{}";
+            await env.DB.prepare("INSERT INTO songs (norm_key,title,artist,album,cover,duration,category,tags,score,source_ids_json,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(norm_key) DO NOTHING")
+              .bind(nk, title, artist || "未知歌手", url.searchParams.get("album") || "", url.searchParams.get("cover") || "", Number(url.searchParams.get("duration") || 0), "点播收藏", "", 300, initIds, Math.floor(Date.now() / 1000)).run();
+            song = await env.DB.prepare("SELECT * FROM songs WHERE norm_key = ?").bind(nk).first();
+          }
+          if (song) id = song.id;
+        }
+
+        if (song) {
+          if (song.lyric_lrc && song.lyric_lrc.trim().length > 10) {
+            return json({ song: { ...song, cover: httpsCover(song.cover), lyric_source: "d1_cache" } });
+          }
+          const ids = JSON.parse(song.source_ids_json || "{}");
+          if (["netease", "msr", "migu", "kuwo"].includes(extSrc) && extId && !ids[extSrc]) ids[extSrc] = extId;
+          const live = await fetchLiveLyric(extSrc || (ids.netease ? "netease" : ids.msr ? "msr" : ""), extId || ids.netease || ids.msr || "", song.title || title, song.artist || artist, song.duration || Number(url.searchParams.get("duration") || 0), ids);
+          if (live.lrc && live.lrc.length > 10) {
+            song.lyric_lrc = live.lrc;
+            song.lyric_trans = live.trans;
+            ctx.waitUntil(env.DB.prepare("UPDATE songs SET lyric_lrc = ?, lyric_trans = ?, updated_at = ? WHERE id = ?").bind(live.lrc, live.trans || "", Math.floor(Date.now() / 1000), song.id).run());
+          }
+          return json({ song: { ...song, cover: httpsCover(song.cover), lyric_source: live.source || "" } });
+        }
+
+        const live = await fetchLiveLyric(extSrc, extId, title, artist, Number(url.searchParams.get("duration") || 0), {});
+        return json({ song: { id: 0, lyric_lrc: live.lrc, lyric_trans: live.trans, lyric_source: live.source || "" } });
       }
 
       if (path === "/api/play") {
