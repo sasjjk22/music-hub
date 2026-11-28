@@ -56,7 +56,7 @@ const RADIO_STATIONS = [
   { id: "drive", title: "公路驾驶 · 燃曲电音", desc: "摇滚、节奏电音，提神醒脑不停歇", icon: "🚗", grad: "linear-gradient(135deg,#dc2626,#f97316)" },
 ];
 
-const DEFAULT_JUNK_WORDS = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x"];
+const DEFAULT_JUNK_WORDS = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x", "翻唱", "cover", "吉他版", "钢琴版", "弹唱"];
 const SOFT_PENALTY_WORDS = ["live", "现场", "演唱会", "翻唱", "cover", "吉他版", "钢琴版", "纯享", "加速", "降调"];
 const SHEET_TAGS = [
   { id: "华语", title: "华语" }, { id: "流行", title: "流行" }, { id: "怀旧", title: "怀旧" },
@@ -201,8 +201,8 @@ async function verifyNot30sTrial(url, durationSec, extraHeaders = {}, minBitrate
       const totalLen = m ? Number(m[1]) : (res.status === 200 ? Number(res.headers.get("content-length") || 0) : 0);
       if (totalLen > 0) {
         const minBytes = durationSec >= 90
-          ? Math.max(1150 * 1024, Math.round(durationSec * (minBitrateKbps / 8) * 1024))
-          : (durationSec === 0 ? 900 * 1024 : 0);
+          ? Math.max(320 * 1024, Math.round(durationSec * (minBitrateKbps / 8) * 1024))
+          : (durationSec === 0 ? 320 * 1024 : 0);
         if (minBytes > 0 && totalLen < minBytes) return null;
       }
       return res.url || url;
@@ -537,25 +537,29 @@ async function liveSearchAlbums(query, limit = 24, page = 1) {
 
 // 修复酷我正则：兼容 'NAME':'...' 与 NAME:'...' 以及 "NAME":"..."
 const HARD_ARTISTS = ["周杰伦", "jay chou", "林俊杰", "陈奕迅", "taylor swift", "五月天", "邓紫棋", "薛之谦", "陶喆", "王力宏"];
+const VERY_HARD_TRACKS = ["七里香", "一路向北", "晴天", "稻香", "夜曲", "以父之名", "青花瓷", "可惜没如果", "江南", "修炼爱情", "十年", "富士山下", "K歌之王"];
 const NORMAL_ARTISTS = ["张学友", "王菲", "beyond", "孙燕姿", "梁静茹", "张国荣", "李宗盛", "刘德华", "莫文蔚", "蔡依林", "田馥甄", "许嵩"];
 
 function getSongDifficulty(song, ids, forceTier = 0) {
   if (forceTier >= 1 && forceTier <= 5) return forceTier;
-  if (ids.r2 || ids.msr || ids.kuwo || ids.bili) return 1;
   const artist = decodeHtml(song.artist || "").toLowerCase();
   const title = decodeHtml(song.title || "").toLowerCase();
+  // Artist/title difficulty must take precedence over cached IDs: a stale Kuwo ID
+  // must never downgrade a known exclusive track to Lv1.
+  if (VERY_HARD_TRACKS.some((t) => title.includes(t.toLowerCase()))) return 5;
   if (HARD_ARTISTS.some((a) => artist.includes(a))) return 4;
-  if (title.includes("live") || title.includes("现场") || title.includes("ost") || title.includes("原声")) return 4;
+  if (title.includes("live") || title.includes("现场") || title.includes("ost") || title.includes("原声") || title.includes("remix")) return 4;
   if (NORMAL_ARTISTS.some((a) => artist.includes(a))) return 3;
+  if (ids.r2 || ids.msr || ids.kuwo || ids.bili) return 1;
   return 2;
 }
 
 const TIER_CFG = {
-  1: { reqMs: 2400, totalMs: 3200, maxRids: 1, vkN: [1] },
-  2: { reqMs: 3200, totalMs: 4500, maxRids: 2, vkN: [1] },
-  3: { reqMs: 4200, totalMs: 6200, maxRids: 2, vkN: [1, 2] },
-  4: { reqMs: 5800, totalMs: 8800, maxRids: 3, vkN: [1, 2] },
-  5: { reqMs: 7500, totalMs: 11500, maxRids: 3, vkN: [1, 2, 3] },
+  1: { reqMs: 2200, totalMs: 3000, maxRids: 1, vkN: [1] },
+  2: { reqMs: 2800, totalMs: 4200, maxRids: 2, vkN: [1] },
+  3: { reqMs: 4000, totalMs: 6000, maxRids: 2, vkN: [1, 2] },
+  4: { reqMs: 6000, totalMs: 8800, maxRids: 3, vkN: [1, 2] },
+  5: { reqMs: 7200, totalMs: 10800, maxRids: 3, vkN: [1, 2, 3] },
 };
 
 async function searchKuwoRids(kw, song, junkWords = DEFAULT_JUNK_WORDS, reqMs = 3500, maxRids = 2) {
@@ -637,7 +641,7 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
     const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(best.id)}&br=320`, { headers: hdrs }, reqMs);
     if (!ur.ok) throw new Error(`gd_u_${ur.status}`);
     const d = await ur.json();
-    if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(1150, song.duration * 6)) throw new Error("gd_30s");
+    if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(320, song.duration * 2.8)) throw new Error("gd_suspicious_size");
     const real = await verifyNot30sTrial(d?.url, song.duration, {}, 44, false);
     if (!real) throw new Error("gd_no_url");
     return { url: real, source: `gd:${plat}` };
@@ -648,7 +652,7 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
       const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${ids.netease}&br=320`, { headers: hdrs }, reqMs);
       if (!ur.ok) throw new Error(`gd_ne_${ur.status}`);
       const d = await ur.json();
-      if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(1200, song.duration * 6)) throw new Error("gd_ne_30s");
+      if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(320, song.duration * 2.8)) throw new Error("gd_ne_suspicious_size");
       const real = await verifyNot30sTrial(d?.url, song.duration, {}, 64, true);
       if (!real) throw new Error("gd_ne_30s");
       return { url: real, source: "gd:netease" };
@@ -771,7 +775,7 @@ async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.b
         const d = p.length === 2 ? p[0] * 60 + p[1] : (p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : 0);
         if (d < 30 || d > 600) continue;
         let sc = scoreCandidate(rawT, rawT + " " + (it.author || ""), song.title, song.artist, d, song.duration, junkWords);
-        for (const nw of noise) if (rawT.toLowerCase().includes(nw) && !song.title.toLowerCase().includes(nw)) sc -= 60;
+        if (noise.some((nw) => rawT.toLowerCase().includes(nw) && !song.title.toLowerCase().includes(nw))) continue;
         if (rawT.toLowerCase().includes("mv") || rawT.toLowerCase().includes("官方") || rawT.toLowerCase().includes("原版")) sc += 25;
         if (sc > bsc) { bsc = sc; best = it; }
       }
@@ -781,12 +785,14 @@ async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.b
 
     const vRes = await fetchTimeout(`${base}/x/web-interface/view?bvid=${bvid}`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, reqMs);
     if (!vRes.ok) { trace.push(`bili_v:${vRes.status}`); return null; }
+    const vCt = (vRes.headers.get("content-type") || "").toLowerCase();
+    if (!vCt.includes("json")) { trace.push("bili:non_json_view"); return null; }
     const cid = (await vRes.json().catch(() => ({})))?.data?.cid;
     if (!cid) { trace.push("bili:no_cid"); return null; }
 
     for (const fnval of [4048, 1]) {
       const uRes = await fetchTimeout(`${base}/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64&fnval=${fnval}&otype=json`, { headers: { "User-Agent": UA, Referer: `https://www.bilibili.com/video/${bvid}`, Cookie: cookie } }, reqMs);
-      if (!uRes.ok) continue;
+      if (!uRes.ok || !(uRes.headers.get("content-type") || "").toLowerCase().includes("json")) continue;
       const uData = (await uRes.json().catch(() => ({})))?.data;
       const audios = uData?.dash?.audio || [];
       if (audios.length) {
@@ -1144,7 +1150,7 @@ export default {
     if (path === "/api/artist") {
         const name = (url.searchParams.get("name") || "").trim(), aid = (url.searchParams.get("id") || "").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
         if (!name && !aid) return json({ songs: [], albums: [] });
-        return withEdgeCache(ctx, `/artist/${encodeURIComponent(aid || name)}/${page}`, 900, async (ttl) => {
+        return withEdgeCache(ctx, `/v12/artist/${encodeURIComponent(aid || name)}/${page}`, 900, async (ttl) => {
           const cfg = await getRuntimeCfg(env); let localRows = [];
           if (page === 1 && name) localRows = ((await env.DB.prepare("SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND artist LIKE ? ORDER BY score DESC LIMIT 50").bind(`%${name}%`).all()).results || []).map((r) => ({ ...r, cover: httpsCover(r.cover) }));
           const seen = new Set(localRows.map((r) => r.norm_key));
@@ -1152,8 +1158,14 @@ export default {
             const official = await fetchOfficialArtistData(name, /^\d+$/.test(aid) ? aid : "", cfg.junkWords), mergedSongs = [...localRows];
             for (const s of official.songs) if (!seen.has(s.norm_key)) { seen.add(s.norm_key); mergedSongs.push(s); }
             if (mergedSongs.length < 15 && name) for (const s of await liveSearchSongs(name, 40, 1, cfg.junkWords)) if (!seen.has(s.norm_key)) { seen.add(s.norm_key); mergedSongs.push(s); }
-            const albums = official.albums.length ? official.albums : (name ? await liveSearchAlbums(name, 20, 1) : []);
-            const okCache = mergedSongs.length >= 15 && albums.length > 0;
+            let albums = official.albums;
+            // 网易云官方专辑接口偶发空响应时，实时搜索补齐；即使官方返回少量数据也补足。
+            if (name && albums.length < 5) {
+              const liveAlbums = await liveSearchAlbums(name, 20, 1);
+              const albumSeen = new Set(albums.map((a) => String(a.id)));
+              for (const a of liveAlbums) if (!albumSeen.has(String(a.id))) { albumSeen.add(String(a.id)); albums.push(a); }
+            }
+            const okCache = albums.length > 0 && mergedSongs.length >= 15;
             return json({ artist: name, page, hasMore: true, songs: mergedSongs, albums }, 200, okCache ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1" });
           }
           const live = await liveSearchSongs(name, 40, page, cfg.junkWords), nameLower = name.toLowerCase();
@@ -1269,7 +1281,7 @@ export default {
         }
         if (!song) return json({ error: "not found" }, 404);
 
-        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v10/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
+        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v11/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
         let resolved = null;
         if (!force) { const cached = await cache.match(cacheKey); if (cached) resolved = await cached.json().catch(() => null); }
         if (force && skip.includes("kuwo")) {
@@ -1305,7 +1317,7 @@ const TOKEN = ${JSON.stringify(env.ACCESS_TOKEN || "")};
 const SRC_URL = ${JSON.stringify(origin + "/s/" + tkSeg + "/music-hub.js")};
 const H = TOKEN ? { "X-Access-Token": TOKEN } : {};
 const UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
-const JUNK = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x"];
+const JUNK = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x", "翻唱", "cover", "吉他版", "钢琴版", "弹唱"];
 const SOFT = ["live", "现场", "演唱会", "翻唱", "cover", "吉他版", "钢琴版", "纯享", "加速", "降调"];
 
 function normStr(s) {
@@ -1343,7 +1355,7 @@ function raceFirst(tasks) {
 module.exports = {
   platform: "MusicHub·自建云端",
   author: "MusicHub",
-  version: "3.1.0",
+  version: "3.2.0",
   srcUrl: SRC_URL,
   cacheControl: "no-cache",
   supportedSearchType: ["music", "album", "artist", "sheet"],
@@ -1405,6 +1417,8 @@ module.exports = {
     var br = quality === "super" ? "999" : quality === "low" ? "128" : quality === "standard" ? "192" : "320";
     var dur = Number(item.duration || 0), cleanArtist = String(item.artist || "").split(new RegExp("[,、&/]"))[0].trim();
     var kw = (normStr(item.title) + " " + cleanArtist).trim(), hdrs = { "User-Agent": UA };
+    var isHardTrack = /[周杰伦林俊杰陈奕迅邓紫棋薛之谦陶喆王力宏]/.test(item.artist || "") || /七里香|一路向北|夜曲|以父之名|可惜没如果|富士山下/.test(item.title || "");
+    var localTimeout = isHardTrack ? 6800 : 2600;
 
     function decHtml(s) {
       return String(s || "").replace(new RegExp("&amp;", "g"), "&").replace(new RegExp("&nbsp;", "g"), " ").replace(new RegExp("&#39;|&apos;", "g"), "'");
@@ -1416,13 +1430,13 @@ module.exports = {
     function verifyBytesIfUnknown(url, sizeKb, extraH, minKbps) {
       var kbps = minKbps || 48;
       if (sizeKb) {
-        if (dur >= 90 && Number(sizeKb) < Math.max(1150, dur * (kbps / 8))) return Promise.reject("trial_size");
+        if (dur >= 90 && Number(sizeKb) < Math.max(320, dur * (kbps / 8))) return Promise.reject("trial_size");
         return Promise.resolve(url);
       }
-      return axios.get(url, { headers: Object.assign({ Range: "bytes=0-0" }, hdrs, extraH || {}), timeout: 2200 }).then(function(hr) {
+      return axios.get(url, { headers: Object.assign({ Range: "bytes=0-0" }, hdrs, extraH || {}), timeout: localTimeout }).then(function(hr) {
         var cr = (hr.headers && hr.headers["content-range"]) || "", m = cr.match(new RegExp("/(\\\\d+)"));
         var cl = m ? Number(m[1]) : Number((hr.headers && hr.headers["content-length"]) || 0);
-        if (cl > 0 && ((dur >= 90 && cl < Math.max(1150 * 1024, dur * (kbps / 8) * 1024)) || (dur === 0 && cl < 900 * 1024))) return Promise.reject("trial_range");
+        if (cl > 0 && ((dur >= 90 && cl < Math.max(320 * 1024, dur * (kbps / 8) * 1024)) || (dur === 0 && cl < 320 * 1024))) return Promise.reject("trial_range");
         return url;
       }).catch(function(e) { return (e === "trial_range") ? Promise.reject(e) : url; });
     }
@@ -1430,7 +1444,7 @@ module.exports = {
     function tryKuwoLocal() {
       return axios.get("https://search.kuwo.cn/r.s", {
         params: { all: kw, ft: "music", itemset: "web_2013", client: "kt", pn: 0, rn: 8, rformat: "json", encoding: "utf8" },
-        headers: hdrs, timeout: 2400
+        headers: hdrs, timeout: localTimeout
       }).then(function(r) {
         var blocks = String(r.data || "").split(new RegExp("\\\\}\\\\s*,\\\\s*\\\\{")), rids = [];
         for (var i = 0; i < blocks.length; i++) {
@@ -1446,7 +1460,7 @@ module.exports = {
         function tryRid(idx) {
           if (idx >= Math.min(2, rids.length)) return Promise.reject("kw_all_ekey");
           var curRid = rids[idx].rid;
-          return axios.get("https://mobi.kuwo.cn/mobi.s", { params: { f: "web", user: 0, source: "kwplayer_ar_8.5.5.0_apk_keluze.apk", type: "convert_url_with_sign", rid: curRid, br: br + "kmp3" }, headers: Object.assign({ Referer: "https://www.kuwo.cn/" }, hdrs), timeout: 2400 })
+          return axios.get("https://mobi.kuwo.cn/mobi.s", { params: { f: "web", user: 0, source: "kwplayer_ar_8.5.5.0_apk_keluze.apk", type: "convert_url_with_sign", rid: curRid, br: br + "kmp3" }, headers: Object.assign({ Referer: "https://www.kuwo.cn/" }, hdrs), timeout: localTimeout })
             .then(function(r2) {
               var txt = String(r2.data || ""), m = txt.match(new RegExp("url=(http[^\\\\s\\\\r\\\\n]+)"));
               var u = m ? m[1] : (r2.data && r2.data.data && r2.data.data.url) || "";
@@ -1459,7 +1473,7 @@ module.exports = {
     }
 
     function tryVKeysLocal() {
-      var qqP = axios.get("https://api.vkeys.cn/v2/music/tencent", { params: { word: kw }, headers: hdrs, timeout: 2200 }).then(function(r) {
+      var qqP = axios.get("https://api.vkeys.cn/v2/music/tencent", { params: { word: kw }, headers: hdrs, timeout: localTimeout }).then(function(r) {
         var arr = r.data && r.data.data, pickN = 1;
         if (Array.isArray(arr) && arr.length) {
           var bsc = -100;
@@ -1469,7 +1483,7 @@ module.exports = {
           }
           if (bsc < 20) return Promise.reject("vk_qq_mismatch");
         }
-        return axios.get("https://api.vkeys.cn/v2/music/tencent", { params: { word: kw, n: pickN, quality: 3 }, headers: hdrs, timeout: 2400 });
+        return axios.get("https://api.vkeys.cn/v2/music/tencent", { params: { word: kw, n: pickN, quality: 3 }, headers: hdrs, timeout: localTimeout });
       }).then(function(r) {
         var d = r.data && r.data.data; if (!d || !d.url || d.ekey) return Promise.reject("vk_qq_empty");
         var iv = parseIv(d.interval);
@@ -1479,7 +1493,7 @@ module.exports = {
       });
       var ts = [qqP];
       if (item.ext_source === "netease" && item.ext_id) {
-        ts.push(axios.get("https://api.vkeys.cn/v2/music/netease", { params: { id: item.ext_id, quality: 3 }, headers: hdrs, timeout: 2400 }).then(function(r) {
+        ts.push(axios.get("https://api.vkeys.cn/v2/music/netease", { params: { id: item.ext_id, quality: 3 }, headers: hdrs, timeout: localTimeout }).then(function(r) {
           var d = r.data && r.data.data; if (!d || !d.url) return Promise.reject("vk_ne_empty");
           return verifyBytesIfUnknown(d.url, 0, {}, 80).then(function(vu) { return { url: vu }; });
         }));
@@ -1490,7 +1504,7 @@ module.exports = {
     function tryGDLocal(plat) {
       var pidP = (plat === "netease" && item.ext_source === "netease" && item.ext_id)
         ? Promise.resolve(item.ext_id)
-        : axios.get("https://music-api.gdstudio.xyz/api.php", { params: { use_xbridge3: "true", types: "search", source: plat, name: kw, count: 6, pages: 1 }, headers: hdrs, timeout: 2600 }).then(function(r) {
+        : axios.get("https://music-api.gdstudio.xyz/api.php", { params: { use_xbridge3: "true", types: "search", source: plat, name: kw, count: 6, pages: 1 }, headers: hdrs, timeout: localTimeout }).then(function(r) {
             if (!Array.isArray(r.data) || !r.data.length) return "";
             var best = null, bsc = -100;
             for (var i = 0; i < r.data.length; i++) { var sc = scoreMatch(r.data[i].name, r.data[i].artist, item.title, item.artist, 0, dur); if (sc > bsc) { bsc = sc; best = r.data[i]; } }
@@ -1498,7 +1512,7 @@ module.exports = {
           });
       return pidP.then(function(pid) {
         if (!pid) return Promise.reject("no_id");
-        return axios.get("https://music-api.gdstudio.xyz/api.php", { params: { use_xbridge3: "true", types: "url", source: plat, id: pid, br: br }, headers: hdrs, timeout: 2600 });
+        return axios.get("https://music-api.gdstudio.xyz/api.php", { params: { use_xbridge3: "true", types: "url", source: plat, id: pid, br: br }, headers: hdrs, timeout: localTimeout });
       }).then(function(r) {
         var d = r.data; if (!d || !d.url || d.url.indexOf("panspace") >= 0) return Promise.reject("gd_empty");
         return verifyBytesIfUnknown(d.url, d.size, {}, 64).then(function(u) { return { url: u }; });
@@ -1520,7 +1534,8 @@ module.exports = {
     }
 
     if (String(item.artist || "").indexOf("塞壬") >= 0) return await tryCloudFallback(0);
-    return await raceFirst([tryKuwoLocal(), tryGDLocal("kuwo"), tryGDLocal("joox"), tryVKeysLocal(), tryGDLocal("netease"), tryCloudFallback(1300)]);
+    var cloudDelay = isHardTrack ? 3200 : 1800;
+    return await raceFirst([tryKuwoLocal(), tryGDLocal("kuwo"), tryGDLocal("joox"), tryVKeysLocal(), tryGDLocal("netease"), tryCloudFallback(cloudDelay)]);
   },
 
   async getLyric(item) {
@@ -1807,14 +1822,13 @@ send(EVENT_NAMES.inited, {
       if (path === "/musicfree.json") {
         const cfg = await getRuntimeCfg(env);
         const plugins = [
-          { name: "MusicHub·自建云端", url: `${origin}/s/${tkSeg}/music-hub.js`, version: "3.1.0" },
+          { name: "MusicHub·自建云端", url: `${origin}/s/${tkSeg}/music-hub.js`, version: "3.2.0" },
           { name: "MusicHub·酷我直连", url: `${origin}/s/${tkSeg}/kuwo.js`, version: "1.1.0" },
-          { name: "MusicHub·B站直连", url: `${origin}/s/${tkSeg}/bili.js`, version: "1.2.0" },
+          { name: "MusicHub·B站直连", url: `${origin}/s/${tkSeg}/bili.js`, version: "1.3.0" },
           { name: "MusicHub·塞壬直连", url: `${origin}/s/${tkSeg}/msr.js`, version: "1.1.0" },
         ];
         if (cfg.subMode === "fusion" || cfg.subMode === "turbo") {
           plugins.push(
-            { name: "歌曲宝(融合)", url: "https://gitee.com/kevinr/tvbox/raw/master/musicfree/plugins/gequbao.js", version: "0.0.1" },
             { name: "种子音乐(融合)", url: "https://gitee.com/kevinr/tvbox/raw/master/musicfree/plugins/zz.js", version: "0.0.1" },
             { name: "爱听(融合)", url: "https://gitee.com/kevinr/tvbox/raw/master/musicfree/plugins/at.js", version: "0.0.1" },
             { name: "5sing(融合)", url: "https://gitee.com/kevinr/tvbox/raw/master/musicfree/plugins/5sing.js", version: "0.0.1" }

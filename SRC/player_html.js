@@ -323,7 +323,7 @@ var chartsCache = [], artistsCache = [], albumsCache = [], searchedArtists = [],
 var artistCat = "全部", chartCat = "全部", albumQuery = "华语经典", artistSearchKw = "";
 var viewSongs = [], playQueue = [], curIdx = -1, curSong = null, lrcRows = [], timerId = null, stopAfterCurrent = false;
 var playMode = localStorage.getItem("mh_mode") || "loop";
-var candidates = [], curCandIdx = -1, playSeq = 0, autoWaitMeta = false, cloudDone = false;
+var candidates = [], curCandIdx = -1, playSeq = 0, autoWaitMeta = false, cloudDone = false, cloudStarted = false;
 var curTabName = "discover", backTarget = "discover", lastSharedData = null;
 var cloudSkips = [], cloudRetries = 0;
 var userLrcScrollUntil = 0, toastTimer = null, radioMode = "", radioFetching = false, recLoading = false;
@@ -1012,10 +1012,16 @@ function fetchDirectGD(s, plat, label, seq) {
   var cleanArtist = (s.artist || "").split(/[/,、&]/)[0].trim();
   var kw = (normStrLocal(s.title) + " " + cleanArtist).trim();
   var base = "https://music-api.gdstudio.xyz/api.php?use_xbridge3=true&types=";
+  var reqTimeout = (/[周杰伦林俊杰陈奕迅邓紫棋薛之谦陶喆王力宏]/.test(s.artist || "") || /七里香|一路向北|夜曲|以父之名|可惜没如果|富士山下/.test(s.title || "")) ? 6800 : 4200;
+  function directFetch(url) {
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = controller ? setTimeout(function(){ controller.abort(); }, reqTimeout) : null;
+    return fetch(url, controller ? { signal: controller.signal } : {}).finally(function(){ if (timer) clearTimeout(timer); });
+  }
   var p = (plat === "netease" && s.ext_source === "netease" && s.ext_id)
     ? Promise.resolve(s.ext_id)
-    : fetch(base + "search&source=" + plat + "&name=" + encodeURIComponent(kw) + "&count=6&pages=1")
-        .then(function(r) { return r.json(); })
+    : directFetch(base + "search&source=" + plat + "&name=" + encodeURIComponent(kw) + "&count=6&pages=1")
+        .then(function(r) { if (!r.ok || !(r.headers.get("content-type") || "").toLowerCase().includes("json")) throw new Error("gd_search_http"); return r.json(); })
         .then(function(arr) {
           if (!Array.isArray(arr) || !arr.length) return "";
           var best = null, bsc = -100;
@@ -1028,11 +1034,13 @@ function fetchDirectGD(s, plat, label, seq) {
 
   p.then(function(pid) {
     if (!pid || seq !== playSeq) return;
-    return fetch(base + "url&source=" + plat + "&id=" + encodeURIComponent(pid) + "&br=320")
-      .then(function(r) { return r.json(); })
+    return directFetch(base + "url&source=" + plat + "&id=" + encodeURIComponent(pid) + "&br=320")
+      .then(function(r) { if (!r.ok || !(r.headers.get("content-type") || "").toLowerCase().includes("json")) throw new Error("gd_url_http"); return r.json(); })
       .then(function(d) {
         if (!d || !d.url || seq !== playSeq) return;
-        if (d.size && s.duration >= 90 && Number(d.size) < Math.max(1150, s.duration * 6)) return;
+        // Size is only a weak pre-filter: 128k/64k complete encodes can be smaller than the old floor.
+        // The audio element's loadedmetadata check below is the authoritative short-version detector.
+        if (d.size && s.duration >= 90 && Number(d.size) < Math.max(320, s.duration * 2.8)) return;
         addCandidate(seq, { label: label + (d.br ? "(" + d.br + "k)" : ""), url: d.url, isTrial: false });
       });
   }).catch(function(){});
@@ -1041,9 +1049,13 @@ function fetchDirectGD(s, plat, label, seq) {
 function fetchDirectVKeys(s, seq) {
   var cleanArtist = (s.artist || "").split(/[/,、&]/)[0].trim();
   var kw = (normStrLocal(s.title) + " " + cleanArtist).trim();
+  var timeoutMs = (/[周杰伦林俊杰陈奕迅邓紫棋薛之谦陶喆王力宏]/.test(s.artist || "") || /七里香|一路向北|夜曲|以父之名|可惜没如果|富士山下/.test(s.title || "")) ? 6800 : 4200;
   ["https://api.vkeys.cn/v2/music", "https://luoyue-api-cf.vincentzyu233.cn/v2/music"].forEach(function(base, idx) {
-    fetch(base + "/tencent?word=" + encodeURIComponent(kw) + "&n=1&quality=3")
-      .then(function(r) { return r.json(); })
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = controller ? setTimeout(function(){ controller.abort(); }, timeoutMs) : null;
+    fetch(base + "/tencent?word=" + encodeURIComponent(kw) + "&n=1&quality=3", controller ? { signal: controller.signal } : {})
+      .finally(function(){ if (timer) clearTimeout(timer); })
+      .then(function(r) { if (!r.ok || !(r.headers.get("content-type") || "").toLowerCase().includes("json")) throw new Error("vkeys_http"); return r.json(); })
       .then(function(res) {
         if (seq !== playSeq) return;
         var d = res && res.data;
@@ -1062,7 +1074,19 @@ function recordHistory(s) {
   localStorage.setItem("mh_history_v1", JSON.stringify(playHistory));
 }
 
-function fetchCloudPlay(s, seq) {
+function fetchCloudPlay(s, seq, immediate) {
+  if (!immediate) {
+    var hardTrack = /[周杰伦林俊杰陈奕迅邓紫棋薛之谦陶喆王力宏]/.test(s.artist || "") || /七里香|一路向北|夜曲|以父之名|可惜没如果|富士山下/.test(s.title || "");
+    var waitMs = hardTrack ? 2400 : 1500;
+    setTimeout(function() {
+      if (seq !== playSeq || cloudStarted) return;
+      if (candidates.some(function(c) { return !c.isTrial; })) return;
+      fetchCloudPlay(s, seq, true);
+    }, waitMs);
+    return;
+  }
+  if (cloudStarted) return;
+  cloudStarted = true;
   var qUrl = "/api/play?id=" + (s.id || 0) + "&q=high&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "") + "&album=" + encodeURIComponent(s.album || "") + "&cover=" + encodeURIComponent(s.cover || "") + "&duration=" + (s.duration || 0);
   if (cloudSkips.length) qUrl += "&skip=" + encodeURIComponent(cloudSkips.join(",")) + "&force=1";
   api(qUrl).then(function(res) {
@@ -1083,7 +1107,7 @@ function fetchCloudPlay(s, seq) {
 function playQueueIdx(idx) {
   if (idx < 0 || idx >= playQueue.length) return;
   curIdx = idx; var s = playQueue[idx]; curSong = s;
-  playSeq++; var seq = playSeq; candidates = []; curCandIdx = -1; autoWaitMeta = false; cloudDone = false;
+  playSeq++; var seq = playSeq; candidates = []; curCandIdx = -1; autoWaitMeta = false; cloudDone = false; cloudStarted = false;
   audio.pause(); audio.removeAttribute("src"); audio.load(); setPlayIcon(false);
 
   recordHistory(s); updateDislikeBtn();
@@ -1113,6 +1137,11 @@ function playQueueIdx(idx) {
   updateMediaSession(s);
 }
 
+audio.addEventListener("error", function() {
+  // 本地直连源加载失败时再启动云端兜底，避免一开始就让 CF 机房抢跑。
+  if (curSong && !cloudStarted && !cloudDone) fetchCloudPlay(curSong, playSeq, true);
+});
+
 audio.addEventListener("loadedmetadata", function() {
   var c = candidates[curCandIdx];
   var isShort = curSong && curSong.duration >= 90 && audio.duration > 0 && (audio.duration <= 65 || audio.duration < curSong.duration * 0.72);
@@ -1122,12 +1151,13 @@ audio.addEventListener("loadedmetadata", function() {
     if (c.label.indexOf("[试听]") < 0 && c.label.indexOf("[短版]") < 0) c.label += tag;
     renderSrcBar();
     for (var i = 0; i < candidates.length; i++) { if (!candidates[i].isTrial) { pickCandidate(i, false); return; } }
+    if (!cloudStarted) { fetchCloudPlay(curSong, playSeq, true); return; }
     if (c.cloudSource && cloudRetries < 2) {
       var srcTag = c.cloudSource.split(":")[0].replace("meting_injahow", "meting");
       if (cloudSkips.indexOf(srcTag) < 0) cloudSkips.push(srcTag);
-      cloudRetries++; cloudDone = false;
+      cloudRetries++; cloudDone = false; cloudStarted = false;
       document.getElementById("dArtist").textContent = curSong.artist + " · 跳过短版，自动匹配完整源...";
-      fetchCloudPlay(curSong, playSeq);
+      fetchCloudPlay(curSong, playSeq, true);
       return;
     }
     if (cloudDone) {
