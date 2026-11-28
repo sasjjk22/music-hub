@@ -219,13 +219,24 @@ async function isDebugAllowed(request, env, cfg) {
   return checkAdmin(request, env);
 }
 
+const TRAD_SIMP_PAIRS = "啞哑謙谦傑杰倫伦陳陈張张劉刘楊杨趙赵黃黄吳吴鄭郑孫孙馬马羅罗葉叶蘇苏蔣蒋韓韩馮冯鄧邓蕭萧謝谢許许盧卢韋韦莊庄嚴严鍾钟麥麦歐欧陽阳溫温藍蓝齊齐學学榮荣麗丽龍龙遙遥輝辉闊阔問问戀恋蘭兰煉炼單单愛爱說说聽听後后來来這这為为們们無无樂乐夢梦風风飛飞開开關关門门長长時时見见還还過过對对錯错點点線线書书寫写語语話话詞词調调聲声響响誰谁麼么裡里邊边頭头臉脸淚泪傷伤獨独演員员國国華华東东萬万億亿雙双與与給给讓让願愿會会該该經经總总結结終终離离別别記记憶忆懷怀變变動动靜静歡欢難难實实虛虚輕轻遠远舊旧歲岁晝昼顏颜紅红綠绿銀银鐵铁銅铜鋼钢網网雲云電电";
+const TRAD_SIMP_MAP = (() => {
+  const m = new Map();
+  for (let i = 0; i + 1 < TRAD_SIMP_PAIRS.length; i += 2) m.set(TRAD_SIMP_PAIRS[i], TRAD_SIMP_PAIRS[i + 1]);
+  return m;
+})();
+function toSimplified(s) {
+  let out = "";
+  for (const ch of String(s || "")) out += TRAD_SIMP_MAP.get(ch) || ch;
+  return out;
+}
 function normalizeName(s) {
-  const raw = String(s || "").toLowerCase().trim();
+  const raw = toSimplified(String(s || "")).toLowerCase().trim();
   const stripped = raw.replace(/[\(（\[【].*?[\)）\]】]/g, "").replace(/\s+/g, " ").trim();
   return stripped || raw.replace(/[\(\)\[\]（）【】]/g, "").replace(/\s+/g, " ").trim();
 }
 function normalizeTitleForKey(s) {
-  const raw = String(s || "").toLowerCase().trim();
+  const raw = toSimplified(String(s || "")).toLowerCase().trim();
   let variant = "";
   const m = raw.match(/[\(（\[【]([^\)）\]】]+)[\)）\]】]/g);
   if (m) {
@@ -282,13 +293,15 @@ async function validateNeteaseSongId(song, songId) {
       method: "POST",
       headers: { ...NE_HEADERS, "Content-Type": "application/x-www-form-urlencoded" },
       body: "c=" + encodeURIComponent(JSON.stringify([{ id: Number(id) }])),
-    }, 3800);
-    if (!response.ok) return false;
+    }, 3500);
+    if (!response.ok) return true; // 上游不可达时放行，不误杀已有 ID
     const contentType = (response.headers.get("content-type") || "").toLowerCase();
-    if (contentType && !contentType.includes("json")) return false;
-    const raw = (await response.json())?.songs?.[0];
+    if (contentType && !contentType.includes("json")) return true;
+    const payload = await response.json();
+    if (payload?.code !== undefined && Number(payload.code) !== 200) return true;
+    const raw = payload?.songs?.[0];
     const meta = mapNeteaseSong(raw);
-    if (!meta) return false;
+    if (!meta) return true;
     const titleOK = normalizeName(meta.title) === normalizeName(song?.title || "");
     const artistOK = artistIdentityMatches(meta.artist, song?.artist || "");
     const versionText = `${meta.title} ${meta.album}`.toLowerCase();
@@ -296,7 +309,7 @@ async function validateNeteaseSongId(song, songId) {
     const durationOK = !(Number(song?.duration) > 0 && Number(meta.duration) > 0) || Math.abs(Number(song.duration) - Number(meta.duration)) <= 20;
     return Boolean(titleOK && artistOK && versionOK && durationOK);
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -336,16 +349,16 @@ function parseCnInterval(str) {
   return p.length === 2 ? p[0] * 60 + p[1] : 0;
 }
 
-async function verifyNot30sTrial(url, durationSec, extraHeaders = {}, minBitrateKbps = 44, strict = false) {
+async function verifyNot30sTrial(url, durationSec, extraHeaders = {}, minBitrateKbps = 44, strict = false, trace = null) {
   if (!isBasicAudioUrl(url)) return null;
   try {
-    const res = await fetchTimeout(url, { method: "GET", headers: { Range: "bytes=0-0", "User-Agent": UA, ...extraHeaders }, redirect: "follow" }, 1800);
+    const res = await fetchTimeout(url, { method: "GET", headers: { Range: "bytes=0-0", "User-Agent": UA, ...extraHeaders }, redirect: "follow" }, 2800);
     if (res.body) res.body.cancel().catch(() => {});
-    if (res.url && (res.url.includes("/404") || res.url.includes("panspace.kuwo.cn"))) return null;
-    if (res.status === 404 || res.status === 410) return null;
+    if (res.url && (res.url.includes("/404") || res.url.includes("panspace.kuwo.cn"))) { pushDebugTrace(trace, "probe:404_url"); return null; }
+    if (res.status === 404 || res.status === 410) { pushDebugTrace(trace, `probe:http_${res.status}`); return null; }
     if (res.status === 200 || res.status === 206) {
       const ct = (res.headers.get("content-type") || "").toLowerCase();
-      if (ct.includes("text/html") || ct.includes("application/json")) return null;
+      if (ct.includes("text/html") || ct.includes("application/json")) { pushDebugTrace(trace, `probe:bad_ct_${ct.slice(0, 24)}`); return null; }
       const cr = res.headers.get("content-range") || "";
       const m = cr.match(/\/(\d+)$/);
       const totalLen = m ? Number(m[1]) : (res.status === 200 ? Number(res.headers.get("content-length") || 0) : 0);
@@ -353,12 +366,14 @@ async function verifyNot30sTrial(url, durationSec, extraHeaders = {}, minBitrate
         const minBytes = durationSec >= 90
           ? Math.max(320 * 1024, Math.round(durationSec * (minBitrateKbps / 8) * 1024))
           : (durationSec === 0 ? 320 * 1024 : 0);
-        if (minBytes > 0 && totalLen < minBytes) return null;
+        if (minBytes > 0 && totalLen < minBytes) { pushDebugTrace(trace, `probe:small_${totalLen}`); return null; }
       }
       return res.url || url;
     }
+    pushDebugTrace(trace, `probe:status_${res.status}`);
     return strict ? null : url;
-  } catch {
+  } catch (e) {
+    pushDebugTrace(trace, `probe:err_${String(e?.message || e).slice(0, 24)}`);
     return strict ? null : url;
   }
 }
@@ -483,7 +498,7 @@ function searchQueryRelevant(query, title, artist, album) {
 async function liveSearchGdSongsWithMeta(query, limit = 30, page = 1, junkList = DEFAULT_JUNK_WORDS, artistHint = "", debugLog = null) {
   const out = [], seen = new Set();
   const base = "https://music-api.gdstudio.xyz/api.php?use_xbridge3=true";
-  const providers = ["netease", "joox", "kuwo"];
+  const providers = ["netease", "joox"];
   let rawCount = 0;
   const batches = await Promise.allSettled(providers.map(async (source) => {
     const url = `${base}&types=search&source=${source}&name=${encodeURIComponent(query)}&count=${Math.min(30, limit)}&pages=${Math.max(1, page)}`;
@@ -1019,7 +1034,7 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
   const base = gdBase.includes("use_xbridge3") ? gdBase : `${gdBase}${sep}use_xbridge3=true`;
   const hdrs = { "User-Agent": UA, Accept: "application/json", Referer: "https://music.gdstudio.xyz/", Origin: "https://music.gdstudio.xyz" };
   const strict = isStrictSong(song);
-  const providers = strict ? ["netease", "joox", "kuwo"] : ["kuwo", "joox", "kugou"];
+  const providers = strict ? ["netease", "joox"] : ["joox", "kugou", "netease"];
   const tasks = providers.map(async (plat) => {
     try {
       const sUrl = `${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`;
@@ -1105,7 +1120,7 @@ async function raceBakaKugou(song, trace, endpoint = "https://api.baka.plus/meti
     const hash = best?.hash || best?.sqhash || best?.["320hash"];
     if (!hash || bsc < (strict ? 80 : 20)) { trace.push("kg:mismatch"); throw new Error("kg_mismatch"); }
     const u = `${base}/?server=kugou&type=url&id=${hash}&br=320`;
-    const real = await verifyNot30sTrial(u, song.duration, {}, 44, true);
+    const real = await verifyNot30sTrial(u, song.duration, {}, 44, false, trace);
     if (!real) { trace.push("kg:probe_rejected"); throw new Error("kg_audio_probe"); }
     return { url: real, source: "baka:kugou" };
   } catch (e) {
@@ -1761,8 +1776,8 @@ async function collectGDStudioAll(song, ids, trace, gdBase = "https://music-api.
   const base = gdBase.includes("use_xbridge3") ? gdBase : `${gdBase}${sep}use_xbridge3=true`;
   const hdrs = { "User-Agent": UA, Accept: "application/json", Referer: "https://music.gdstudio.xyz/", Origin: "https://music.gdstudio.xyz" };
   const strict = isStrictSong(song);
-  const providers = strict ? ["netease", "joox", "kuwo"] : ["kuwo", "joox", "kugou", "netease"];
-  const tasks = providers.map(async (plat) => {
+  const providers = ["joox", "kugou", "netease"];
+  const tasks = providers.map((plat) => raceWithDeadline((async () => {
     const t0 = Date.now();
     try {
       const sUrl = `${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`;
@@ -1788,9 +1803,10 @@ async function collectGDStudioAll(song, ids, trace, gdBase = "https://music-api.
       pushDebugTrace(trace, `gd:${plat}:${String(e?.message || e).slice(0, 40)}`);
       return null;
     }
-  });
+  })(), 5000).catch(() => { pushDebugTrace(trace, `gd:${plat}:deadline`); return null; }));
+
   if (ids.netease) {
-    tasks.push((async () => {
+    tasks.push(raceWithDeadline((async () => {
       const t0 = Date.now();
       try {
         if (strict && !(await strictIdCheck)) throw new Error("id_mismatch");
@@ -1806,7 +1822,7 @@ async function collectGDStudioAll(song, ids, trace, gdBase = "https://music-api.
         pushDebugTrace(trace, `gd:netease-id:${String(e?.message || e).slice(0, 40)}`);
         return null;
       }
-    })());
+    })(), 4800).catch(() => null));
   }
   return (await Promise.all(tasks)).filter(Boolean);
 }
@@ -1908,7 +1924,7 @@ async function resolveAllPlayUrls(song, quality, env, debugMode = false) {
   jobs.push((async () => {
     const t0 = Date.now(), st = [];
     if (!isEnabled("gdstudio")) { if (debugMode) debugSources.push({ source: "gdstudio", status: "disabled", ms: 0 }); return; }
-    const list = await raceWithDeadline(collectGDStudioAll(song, ids, st, srcMap.get("gdstudio")?.endpoint || "https://music-api.gdstudio.xyz/api.php", cfg.junkWords, reqMs, strictIdCheck), 5500).catch(() => []);
+    const list = await raceWithDeadline(collectGDStudioAll(song, ids, st, srcMap.get("gdstudio")?.endpoint || "https://music-api.gdstudio.xyz/api.php", cfg.junkWords, reqMs, strictIdCheck), 6200).catch(() => []);
     list.forEach(pushHit);
     if (debugMode) debugSources.push({ source: "gdstudio", status: list.length ? "hit" : "failed", ms: Date.now() - t0, detail: list.map((x) => x.source).join(","), trace: st });
   })());
