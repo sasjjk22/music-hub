@@ -56,7 +56,7 @@ const RADIO_STATIONS = [
   { id: "drive", title: "公路驾驶 · 燃曲电音", desc: "摇滚、节奏电音，提神醒脑不停歇", icon: "🚗", grad: "linear-gradient(135deg,#dc2626,#f97316)" },
 ];
 
-const DEFAULT_JUNK_WORDS = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x", "翻唱", "cover", "吉他版", "钢琴版", "弹唱"];
+const DEFAULT_JUNK_WORDS = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x", "翻唱", "cover", "吉他版", "钢琴版", "弹唱", "纯音乐", "instrumental", "钢琴曲", "演奏版", "背景音乐", "轻音乐", "伴奏版"];
 const SOFT_PENALTY_WORDS = ["live", "现场", "演唱会", "翻唱", "cover", "吉他版", "钢琴版", "纯享", "加速", "降调"];
 const SHEET_TAGS = [
   { id: "华语", title: "华语" }, { id: "流行", title: "流行" }, { id: "怀旧", title: "怀旧" },
@@ -216,6 +216,8 @@ async function verifyNot30sTrial(url, durationSec, extraHeaders = {}, minBitrate
 function scoreCandidate(cTitle, cArtist, oTitle, oArtist, cDur, oDur, junkWords = DEFAULT_JUNK_WORDS) {
   const raw = decodeHtml(cTitle).toLowerCase(), ro = decodeHtml(oTitle).toLowerCase();
   if (!raw) return -999;
+  const instrumentalTerms = ["纯音乐", "instrumental", "钢琴曲", "演奏版", "背景音乐", "轻音乐", "伴奏版"];
+  if (instrumentalTerms.some((w) => raw.includes(w) && !ro.includes(w))) return -999;
   if (junkWords.some((w) => raw.includes(w) && !ro.includes(w))) return -999;
   const d = Number(cDur || 0), od = Number(oDur || 0);
   if (od >= 90 && d > 0 && (d <= 65 || d < od * 0.72)) return -999;
@@ -254,6 +256,32 @@ async function liveSearchSongs(query, limit = 40, page = 1, junkList = DEFAULT_J
       if (out.length) break;
     } catch {}
   }
+  return out;
+}
+
+async function liveSearchGdSongs(query, limit = 30, page = 1, junkList = DEFAULT_JUNK_WORDS) {
+  const out = [], seen = new Set();
+  const base = "https://music-api.gdstudio.xyz/api.php?use_xbridge3=true";
+  const url = `${base}&types=search&source=netease,kuwo,joox&name=${encodeURIComponent(query)}&count=${Math.min(30, limit)}&pages=${Math.max(1, page)}`;
+  try {
+    const r = await fetchTimeout(url, { headers: { "User-Agent": UA, Accept: "application/json", Referer: "https://music.gdstudio.xyz/" } }, 4200);
+    if (!r.ok || !(r.headers.get("content-type") || "").toLowerCase().includes("json")) return out;
+    const arr = await r.json();
+    if (!Array.isArray(arr)) return out;
+    for (const item of arr) {
+      const title = String(item.name || "").trim();
+      const artist = Array.isArray(item.artist) ? item.artist.join(" / ") : String(item.artist || "");
+      if (!title || isJunkTitle(title, query, junkList)) continue;
+      if (scoreCandidate(title, artist, query, "", Number(item.duration || 0), 0, junkList) < 0) continue;
+      const source = String(item.source || "netease");
+      const id = String(item.id || "");
+      if (!id) continue;
+      const norm_key = makeNormKey(title, artist);
+      if (seen.has(norm_key)) continue;
+      seen.add(norm_key);
+      out.push({ id: 0, norm_key, title, artist: artist || "未知歌手", album: item.album || "", cover: item.pic_id ? `${base}&types=pic&source=${encodeURIComponent(source)}&id=${encodeURIComponent(item.pic_id)}&size=500` : "", duration: Number(item.duration || 0), category: "全网搜索", source_ids_json: "{}", ext_source: source, ext_id: id });
+    }
+  } catch {}
   return out;
 }
 
@@ -1232,7 +1260,7 @@ export default {
       if (path === "/api/search") {
         const q = (url.searchParams.get("q") || "").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
         if (!q) return json({ songs: [] });
-        return withEdgeCache(ctx, `/search/${encodeURIComponent(q)}/${page}`, 300, async (ttl) => {
+        return withEdgeCache(ctx, `/v12/search/${encodeURIComponent(q)}/${page}`, 300, async (ttl) => {
           const cfg = await getRuntimeCfg(env); let localRows = [];
           if (page === 1) {
             const tokens = q.split(/\s+/).map((t) => t.replace(/"/g, "").trim()).filter(Boolean);
@@ -1242,9 +1270,16 @@ export default {
               localRows = ((await env.DB.prepare(`SELECT id,norm_key,title,artist,album,cover,duration,category,source_ids_json FROM songs WHERE is_blocked = 0 AND ${likeConds} ORDER BY score DESC LIMIT 25`).bind(...tokens.flatMap((t) => [`%${t}%`, `%${t}%`, `%${t}%`])).all()).results || []).map((r) => ({ ...r, cover: httpsCover(r.cover) }));
             }
           }
-          const merged = [...localRows], seen = new Set(merged.map((r) => r.norm_key)), live = await liveSearchSongs(q, 40, page, cfg.junkWords);
+          const merged = [...localRows], seen = new Set(merged.map((r) => r.norm_key));
+          const live = await liveSearchSongs(q, 40, page, cfg.junkWords);
           for (const item of live) if (!seen.has(item.norm_key)) { seen.add(item.norm_key); merged.push(item); }
-          return json({ page, hasMore: live.length >= 30, songs: merged }, 200, { "Cache-Control": `public, max-age=${ttl}` });
+          // 网易云在 CF 机房限流或返回空结果时，使用已验证可用的 GDStudio 搜索补位。
+          if (merged.length < 8) {
+            const gdLive = await liveSearchGdSongs(q, 30, page, cfg.junkWords);
+            for (const item of gdLive) if (!seen.has(item.norm_key)) { seen.add(item.norm_key); merged.push(item); }
+          }
+          const headers = merged.length ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1", "Cache-Control": "no-store" };
+          return json({ page, hasMore: live.length >= 30 || merged.length >= 30, songs: merged }, 200, headers);
         });
       }
       if (path === "/api/song") {
