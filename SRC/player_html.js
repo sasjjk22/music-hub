@@ -1477,8 +1477,12 @@ function playQueueIdx(idx) {
   cloudSkips = []; cloudRetries = 0;
   fetchCloudPlay(s, seq, false, "");
 
-  api("/api/song?id=" + (s.id || 0) + "&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "")).then(function(d) {
-    if (seq === playSeq) parseLrc((d.song && d.song.lyric_lrc) || "", (d.song && d.song.lyric_trans) || "");
+  api("/api/song?id=" + (s.id || 0) + "&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "") + "&album=" + encodeURIComponent(s.album || "") + "&cover=" + encodeURIComponent(s.cover || "") + "&duration=" + (s.duration || 0)).then(function(d) {
+    if (seq === playSeq && d && d.song) {
+      if (d.song.id && !s.id) s.id = d.song.id;
+      if (isDebugActive()) dbgLogPlay(d.song.lyric_lrc ? "ok" : "warn", "歌词", d.song.lyric_lrc ? ("命中(" + (d.song.lyric_source || "ok") + ")，已缓存至 D1 #" + (d.song.id || 0)) : "全网未匹配到歌词", "");
+      parseLrc(d.song.lyric_lrc || "", d.song.lyric_trans || "");
+    }
   }).catch(function(){});
   updateMediaSession(s);
 }
@@ -1595,7 +1599,15 @@ function parseLrc(raw, transRaw) {
   (transRaw || "").split(/\\r?\\n/).forEach(function(line) { var m = line.match(/\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)/); if (m) transMap[Math.round((Number(m[1]) * 60 + Number(m[2])) * 10)] = m[3].trim(); });
   (raw || "").split(/\\r?\\n/).forEach(function(line) { var m = line.match(/\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)/); if (m) { var t = Number(m[1]) * 60 + Number(m[2]), txt = m[3].trim(); if (txt) lrcRows.push({ t: t, txt: txt, tr: transMap[Math.round(t * 10)] || "" }); } });
   lrcEl.scrollTop = 0;
-  if (!lrcRows.length) { lrcEl.innerHTML = '<div class="lrc-row">暂无同步歌词</div>'; return; }
+  if (!lrcRows.length) {
+    var plainLines = String(raw || "").split(/\\r?\\n/).map(function(x) { return x.trim(); }).filter(Boolean);
+    if (plainLines.length) {
+      lrcEl.innerHTML = '<div class="lrc-row" style="font-size:12px;opacity:.6;">（纯文本歌词，不支持滚动）</div>' + plainLines.map(function(line) { return '<div class="lrc-row">' + esc(line) + '</div>'; }).join("");
+    } else {
+      lrcEl.innerHTML = '<div class="lrc-row">暂无同步歌词</div>';
+    }
+    return;
+  }
   lrcEl.innerHTML = lrcRows.map(function(r, i) { return '<div class="lrc-row" id="lr' + i + '" onclick="seekLrc(' + i + ')">' + esc(r.txt) + (r.tr ? '<small>' + esc(r.tr) + '</small>' : '') + '</div>'; }).join("");
 }
 function seekLrc(i) { if (lrcRows[i] && audio.duration) { audio.currentTime = lrcRows[i].t; userLrcScrollUntil = 0; if (audio.paused) togglePlay(); } }
