@@ -186,28 +186,30 @@ function parseCnInterval(str) {
   return p.length === 2 ? p[0] * 60 + p[1] : 0;
 }
 
-async function verifyNot30sTrial(url, durationSec, extraHeaders = {}, minBitrateKbps = 44) {
+async function verifyNot30sTrial(url, durationSec, extraHeaders = {}, minBitrateKbps = 44, strict = false) {
   if (!isBasicAudioUrl(url)) return null;
   try {
-    const res = await fetchTimeout(url, { method: "GET", headers: { Range: "bytes=0-0", "User-Agent": UA, ...extraHeaders }, redirect: "follow" }, 2200);
+    const res = await fetchTimeout(url, { method: "GET", headers: { Range: "bytes=0-0", "User-Agent": UA, ...extraHeaders }, redirect: "follow" }, 1800);
     if (res.body) res.body.cancel().catch(() => {});
     if (res.url && (res.url.includes("/404") || res.url.includes("panspace.kuwo.cn"))) return null;
-    if (res.status === 404 || res.status === 410 || res.status >= 500) return null;
-    const ct = (res.headers.get("content-type") || "").toLowerCase();
-    if (ct.includes("text/html") || ct.includes("application/json")) return null;
-    const cr = res.headers.get("content-range") || "";
-    const m = cr.match(/\/(\d+)$/);
-    const totalLen = m ? Number(m[1]) : (res.status === 200 ? Number(res.headers.get("content-length") || 0) : 0);
-    // 已知时长>=90s，或未知时长(0)但文件不足 900KB，一律判为 30 秒试听截断
-    if (totalLen > 0) {
-      const minBytes = durationSec >= 90
-        ? Math.max(1150 * 1024, Math.round(durationSec * (minBitrateKbps / 8) * 1024))
-        : (durationSec === 0 ? 900 * 1024 : 0);
-      if (minBytes > 0 && totalLen < minBytes) return null;
+    if (res.status === 404 || res.status === 410) return null;
+    if (res.status === 200 || res.status === 206) {
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      if (ct.includes("text/html") || ct.includes("application/json")) return null;
+      const cr = res.headers.get("content-range") || "";
+      const m = cr.match(/\/(\d+)$/);
+      const totalLen = m ? Number(m[1]) : (res.status === 200 ? Number(res.headers.get("content-length") || 0) : 0);
+      if (totalLen > 0) {
+        const minBytes = durationSec >= 90
+          ? Math.max(1150 * 1024, Math.round(durationSec * (minBitrateKbps / 8) * 1024))
+          : (durationSec === 0 ? 900 * 1024 : 0);
+        if (minBytes > 0 && totalLen < minBytes) return null;
+      }
+      return res.url || url;
     }
-    return res.url || url;
+    return strict ? null : url;
   } catch {
-    return null;
+    return strict ? null : url;
   }
 }
 
@@ -534,101 +536,55 @@ async function liveSearchAlbums(query, limit = 24, page = 1) {
 }
 
 // 修复酷我正则：兼容 'NAME':'...' 与 NAME:'...' 以及 "NAME":"..."
-async function searchKuwoRids(kw, song, junkWords) {
+async function searchKuwoRids(kw, song, junkWords = DEFAULT_JUNK_WORDS) {
   const sr = await fetchTimeout(
     `https://search.kuwo.cn/r.s?all=${encodeURIComponent(kw)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=8&rformat=json&encoding=utf8`,
-    { headers: { "User-Agent": UA } }, 2400
+    { headers: { "User-Agent": UA } }, 2200
   );
   const txt = await sr.text();
-  const blocks = txt.split(/\}\s*,\s*\{/);
   const list = [];
-  for (const blk of blocks) {
+  for (const blk of txt.split(/\}\s*,\s*\{/)) {
     const rid = (blk.match(/MUSIC_(\d+)/) || [])[1];
     if (!rid) continue;
     const nm = decodeHtml((blk.match(/['"]?NAME['"]?\s*:\s*['"]([^'"]*)['"]/) || [])[1] || "");
     const ar = decodeHtml((blk.match(/['"]?ARTIST['"]?\s*:\s*['"]([^'"]*)['"]/) || [])[1] || "");
     const dur = Number((blk.match(/['"]?DURATION['"]?\s*:\s*['"]?(\d+)['"]?/) || [])[1] || 0);
     const sc = scoreCandidate(nm, ar, song.title, song.artist, dur, song.duration, junkWords);
-    if (sc > -40) list.push({ rid, sc });
+    if (sc >= 15) list.push({ rid, sc });
   }
   list.sort((a, b) => b.sc - a.sc);
   return list.slice(0, 2).map((x) => x.rid);
 }
 
 async function fetchKuwoByRid(rid, song) {
-  const mobiEps = [
+  const eps = [
     `https://mobi.kuwo.cn/mobi.s?f=web&user=0&source=kwplayer_ar_8.5.5.0_apk_keluze.apk&type=convert_url_with_sign&rid=${rid}&br=320kmp3`,
     `https://mobi.kuwo.cn/mobi.s?f=web&type=convert_url_with_sign&source=kwplayer_ar_4.4.2.7_B_nuoweida_vh.apk&rid=${rid}&format=mp3&br=192kmp3`,
   ];
-  for (const ep of mobiEps) {
-    try {
-      const r = await fetchTimeout(ep, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, 2200);
-      const txt = await r.text();
-      let u = "", ekey = "", dur = 0;
-      try { const j = JSON.parse(txt); u = j?.data?.url || j?.url || ""; ekey = j?.data?.ekey || ""; dur = Number(j?.data?.duration || 0); }
-      catch { const m = txt.match(/url=(http[^\s\r\n]+)/); if (m) u = m[1]; }
-      if (ekey || !isBasicAudioUrl(u)) continue;
-      if (dur > 0 && song.duration >= 90 && dur <= 65) continue;
-      const real = await verifyNot30sTrial(u, song.duration, { Referer: "https://www.kuwo.cn/" }, 80);
-      if (real) return { url: real, source: "kuwo", kuwoId: rid };
-    } catch {}
-  }
-  return null;
+  return Promise.any(eps.map(async (ep) => {
+    const r = await fetchTimeout(ep, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, 2200);
+    const txt = await r.text();
+    let u = "", ekey = "", dur = 0;
+    try { const j = JSON.parse(txt); u = j?.data?.url || j?.url || ""; ekey = j?.data?.ekey || ""; dur = Number(j?.data?.duration || 0); }
+    catch { const m = txt.match(/url=(http[^\s\r\n]+)/); if (m) u = m[1]; }
+    if (ekey || !isBasicAudioUrl(u)) throw new Error("kw_ekey");
+    if (dur > 0 && song.duration >= 90 && dur <= 65) throw new Error("kw_trial");
+    const real = dur > 0 ? u : await verifyNot30sTrial(u, song.duration, { Referer: "https://www.kuwo.cn/" }, 44, false);
+    if (!real) throw new Error("kw_invalid");
+    return { url: real, source: "kuwo", kuwoId: rid };
+  }));
 }
 
-async function raceKuwoAll(song, ids, trace, junkWords) {
+async function raceKuwoAll(song, ids, trace, junkWords = DEFAULT_JUNK_WORDS) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
   const rids = ids.kuwo ? [ids.kuwo] : (await searchKuwoRids(kw, song, junkWords).catch(() => []));
   if (!rids.length) { trace.push("kw:no_rid"); throw new Error("no_rid"); }
-
   for (const rid of rids) {
-    const hit = await fetchKuwoByRid(rid, song);
-    if (hit) return hit;
+    try { return await fetchKuwoByRid(rid, song); } catch {}
   }
   trace.push("kw:fail");
   throw new Error("kw_fail");
-}
-
-// 歌曲宝：延迟 900ms 仅做保底，且强制要求原唱歌手匹配（bestSc >= 65，彻底杜绝翻唱！）
-async function raceGequbao(song, trace, junkWords) {
-  await new Promise((r) => setTimeout(r, 900));
-  const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
-  const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
-  try {
-    const sr = await fetchTimeout(`https://www.gequbao.com/s/${encodeURIComponent(kw)}`, { headers: { "User-Agent": UA } }, 2600);
-    if (!sr.ok) { trace.push(`gqb:http${sr.status}`); throw new Error("gqb"); }
-    const h = await sr.text();
-    const matches = [...h.matchAll(/href="\/music\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi)];
-    let bestId = "", bestSc = -100;
-    for (const m of matches.slice(0, 8)) {
-      const txt = decodeHtml(m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
-      const low = txt.toLowerCase();
-      if (junkWords.some((w) => low.includes(w) && !song.title.toLowerCase().includes(w))) continue;
-      const sc = scoreCandidate(txt, txt, song.title, song.artist, 0, song.duration, junkWords);
-      if (sc > bestSc) { bestSc = sc; bestId = m[1]; }
-    }
-    if (!bestId || bestSc < 65) { trace.push("gqb:no_orig"); throw new Error("gqb_no_orig"); }
-
-    const dr = await fetchTimeout(`https://www.gequbao.com/music/${bestId}`, { headers: { "User-Agent": UA, Referer: "https://www.gequbao.com/" } }, 2600);
-    const dh = await dr.text();
-    const pid = (dh.match(/play_id\s*[:=]\s*['"]([^'"]+)['"]/) || [])[1];
-    if (!pid) { trace.push("gqb:no_pid"); throw new Error("gqb_no_pid"); }
-
-    const pr = await fetchTimeout("https://www.gequbao.com/api/play-url", {
-      method: "POST",
-      headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With": "XMLHttpRequest", Referer: `https://www.gequbao.com/music/${bestId}` },
-      body: `id=${encodeURIComponent(pid)}`,
-    }, 2600);
-    const pd = await pr.json();
-    const u = pd?.data?.url || pd?.url || "";
-    const real = await verifyNot30sTrial(u, song.duration, { Referer: "https://www.gequbao.com/" }, 64);
-    if (!real) { trace.push("gqb:trial"); throw new Error("gqb_trial"); }
-    return { url: real, source: "gequbao" };
-  } catch (e) {
-    if (!trace.some((t) => t.startsWith("gqb:"))) trace.push("gqb:err");
-    throw e;
-  }
 }
 
 async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstudio.xyz/api.php", junkWords = DEFAULT_JUNK_WORDS) {
@@ -638,7 +594,7 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
   const base = gdBase.includes("use_xbridge3") ? gdBase : `${gdBase}${sep}use_xbridge3=true`;
   const hdrs = { "User-Agent": UA, Accept: "application/json", Referer: "https://music.gdstudio.xyz/", Origin: "https://music.gdstudio.xyz" };
 
-  const tasks = ["kuwo", "joox"].map(async (plat) => {
+  const tasks = ["kuwo", "joox", "kugou"].map(async (plat) => {
     const sr = await fetchTimeout(`${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`, { headers: hdrs }, 2400);
     if (!sr.ok) throw new Error(`gd_s_${sr.status}`);
     const arr = await sr.json();
@@ -652,8 +608,8 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
     const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(best.id)}&br=320`, { headers: hdrs }, 2400);
     if (!ur.ok) throw new Error(`gd_u_${ur.status}`);
     const d = await ur.json();
-    if (d?.size && song.duration >= 90 && Number(d.size) < 1300) throw new Error("gd_30s");
-    const real = await verifyNot30sTrial(d?.url, song.duration, {}, 64);
+    if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(1150, song.duration * 6)) throw new Error("gd_30s");
+    const real = await verifyNot30sTrial(d?.url, song.duration, {}, 44, false);
     if (!real) throw new Error("gd_no_url");
     return { url: real, source: `gd:${plat}` };
   });
@@ -663,8 +619,8 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
       const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${ids.netease}&br=320`, { headers: hdrs }, 2400);
       if (!ur.ok) throw new Error(`gd_ne_${ur.status}`);
       const d = await ur.json();
-      if (d?.size && song.duration >= 90 && Number(d.size) < 1300) throw new Error("gd_ne_30s");
-      const real = await verifyNot30sTrial(d?.url, song.duration, {}, 80);
+      if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(1200, song.duration * 6)) throw new Error("gd_ne_30s");
+      const real = await verifyNot30sTrial(d?.url, song.duration, {}, 64, true);
       if (!real) throw new Error("gd_ne_30s");
       return { url: real, source: "gd:netease" };
     })());
@@ -672,50 +628,66 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
   try { return await Promise.any(tasks); } catch { trace.push("gd:fail"); throw new Error("gd_fail"); }
 }
 
+// 酷狗移动搜索 + Baka 聚合直链（2026 musicdl / LenoMusic 实测有效通道）
+async function raceBakaKugou(song, trace, junkWords = DEFAULT_JUNK_WORDS) {
+  const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
+  const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
+  try {
+    const sr = await fetchTimeout(`https://msearchcdn.kugou.com/api/v3/search/song?keyword=${encodeURIComponent(kw)}&page=1&pagesize=6`, { headers: { "User-Agent": UA } }, 2400);
+    const list = (await sr.json())?.data?.info || [];
+    let best = null, bsc = -100;
+    for (const it of list) {
+      const sc = scoreCandidate(it.songname, it.singername, song.title, song.artist, it.duration, song.duration, junkWords);
+      if (sc > bsc) { bsc = sc; best = it; }
+    }
+    const hash = best?.hash || best?.sqhash || best?.["320hash"];
+    if (!hash || bsc < 20) { trace.push("kg:mismatch"); throw new Error("kg_mismatch"); }
+    const u = `https://api.baka.plus/meting/?server=kugou&type=url&id=${hash}&br=320`;
+    const real = await verifyNot30sTrial(u, song.duration, {}, 44, true);
+    if (!real) { trace.push("kg:30s"); throw new Error("kg_30s"); }
+    return { url: real, source: "baka:kugou" };
+  } catch (e) {
+    if (!trace.some((t) => t.startsWith("kg:"))) trace.push("kg:fail");
+    throw e;
+  }
+}
+
 async function raceVKeys(song, ids, trace, vkeysBase = "https://api.vkeys.cn/v2/music", junkWords = DEFAULT_JUNK_WORDS) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
-  const base = vkeysBase.replace(/\/$/, "");
+  const endpoints = [vkeysBase.replace(/\/$/, ""), "https://luoyue-api-cf.vincentzyu233.cn/v2/music"];
 
-  const qqTask = (async () => {
-    let pickN = 1;
-    try {
-      const listR = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}`, { headers: { "User-Agent": UA } }, 2200);
-      const listJ = await listR.json();
-      if (Array.isArray(listJ?.data) && listJ.data.length) {
-        let bestIdx = -1, bsc = -100;
-        for (let i = 0; i < Math.min(8, listJ.data.length); i++) {
-          const it = listJ.data[i];
-          const sc = scoreCandidate(it.song || it.name, it.singer || it.artist, song.title, song.artist, parseCnInterval(it.interval), song.duration, junkWords);
-          if (sc > bsc) { bsc = sc; bestIdx = i + 1; }
-        }
-        if (bestIdx > 0 && bsc >= 20) pickN = bestIdx;
-      }
-    } catch {}
-
-    for (const q of [3, 2]) {
-      const r = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}&n=${pickN}&quality=${q}`, { headers: { "User-Agent": UA } }, 2600);
-      const d = (await r.json())?.data;
-      if (!d || !d.url || d.ekey) continue;
-      const vkDur = parseCnInterval(d.interval);
-      if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) continue;
-      if (scoreCandidate(d.song || song.title, d.singer || song.artist, song.title, song.artist, vkDur, song.duration, junkWords) < 20) continue;
-      const real = await verifyNot30sTrial(d.url, 1, {}, 24); // 已由 interval 验证完整时长，只拦截 404/HTML
-      if (real) return { url: real, source: "vkeys:qq" };
+  const qqTasks = endpoints.map(async (base, idx) => {
+    for (const q of [4, 3, 2, 1]) {
+      try {
+        const r = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}&n=1&quality=${q}`, { headers: { "User-Agent": UA } }, 2400);
+        const d = (await r.json())?.data;
+        if (!d || !isBasicAudioUrl(d.url) || d.ekey) continue;
+        const vkDur = parseCnInterval(d.interval);
+        if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) continue;
+        if (scoreCandidate(d.song || song.title, d.singer || song.artist, song.title, song.artist, vkDur, song.duration, junkWords) < 15) continue;
+        return { url: d.url, source: idx === 0 ? "vkeys:qq" : "luoyue:qq" };
+      } catch {}
     }
     throw new Error("vk_qq_empty");
-  })();
+  });
 
-  const tasks = [qqTask];
+  const tasks = [...qqTasks];
   if (ids.netease) {
     tasks.push((async () => {
-      const r = await fetchTimeout(`${base}/netease?id=${ids.netease}&quality=3`, { headers: { "User-Agent": UA } }, 2600);
-      const d = (await r.json())?.data;
-      const vkDur = parseCnInterval(d?.interval);
-      if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) throw new Error("vk_ne_30s");
-      const real = await verifyNot30sTrial(d?.url, song.duration, {}, 80);
-      if (!real) throw new Error("vk_ne_30s");
-      return { url: real, source: "vkeys:ne" };
+      for (const base of endpoints) {
+        for (const q of [4, 3, 2]) {
+          try {
+            const r = await fetchTimeout(`${base}/netease?id=${ids.netease}&quality=${q}`, { headers: { "User-Agent": UA } }, 2400);
+            const d = (await r.json())?.data;
+            const vkDur = parseCnInterval(d?.interval);
+            if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) continue;
+            const real = await verifyNot30sTrial(d?.url, song.duration, {}, 64, true);
+            if (real) return { url: real, source: "vkeys:ne" };
+          } catch {}
+        }
+      }
+      throw new Error("vk_ne_30s");
     })());
   }
   try { return await Promise.any(tasks); } catch { trace.push("vkeys:fail"); throw new Error("vkeys"); }
@@ -725,99 +697,66 @@ async function raceMeting(baseUrl, tag, neteaseId, durationSec, trace) {
   if (!neteaseId) throw new Error("no_id");
   const r = await fetchTimeout(`${baseUrl}?server=netease&type=song&id=${neteaseId}`, { headers: { "User-Agent": UA } }, 2400);
   if (!r.ok) { trace.push(`${tag}:${r.status}`); throw new Error(r.status); }
-  const arr = await r.json(), u = Array.isArray(arr) ? arr[0]?.url : arr?.url;
-  const real = await verifyNot30sTrial(u, durationSec);
+  const arr = await r.json();
+  const u = Array.isArray(arr) ? arr[0]?.url : arr?.url;
+  const real = await verifyNot30sTrial(u, durationSec, {}, 64, true);
   if (!real) { trace.push(`${tag}:30s`); throw new Error("trial"); }
   return { url: real, source: tag };
 }
 
-// 修复 B站风控：先拿 spi (buvid3)，再带 Cookie 请求 nav；若仍无 WBI Key 则降级无签名搜索
-async function getBiliAuth(apiBase = "https://api.bilibili.com") {
-  const now = Date.now();
-  if (biliAuthCache.buvid3 && biliAuthCache.imgKey && now - biliAuthCache.ts < 1800 * 1000) return biliAuthCache;
-  const base = apiBase.replace(/\/$/, ""), hdrs = { "User-Agent": UA, Referer: "https://www.bilibili.com/" };
-  const spiRes = await fetchTimeout(`${base}/x/frontend/finger/spi`, { headers: hdrs }, 3000).then((r) => r.json()).catch(() => ({}));
-  const spi = spiRes?.data || {};
-  const ck = `buvid3=${spi.b_3 || ""}; buvid4=${spi.b_4 || ""}`;
-  const navRes = await fetchTimeout(`${base}/x/web-interface/nav`, { headers: { ...hdrs, Cookie: ck } }, 3000).then((r) => r.json()).catch(() => ({}));
-  const wbi = navRes?.data?.wbi_img || {};
-  const imgKey = (wbi.img_url || "").split("/").pop().split(".")[0], subKey = (wbi.sub_url || "").split("/").pop().split(".")[0];
-  biliAuthCache = { buvid3: spi.b_3 || "", buvid4: spi.b_4 || "", imgKey, subKey, ts: now };
-  return biliAuthCache;
-}
-
-async function signBiliWbi(params, imgKey, subKey) {
-  const orig = imgKey + subKey, mixinKey = BILI_MIXIN_TAB.map((i) => orig[i] || "").join("").slice(0, 32);
-  const all = { ...params, wts: Math.floor(Date.now() / 1000) };
-  const query = Object.keys(all).sort().map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(all[k]).replace(/[!'()*]/g, ""))}`).join("&");
-  return `${query}&w_rid=${await digestHex("MD5", query + mixinKey)}`;
-}
-
-function parseBiliDur(str) {
-  if (!str) return 0;
-  const p = String(str).split(":").map(Number);
-  return p.length === 2 ? p[0] * 60 + p[1] : (p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : 0);
-}
-
-async function fallbackBilibiliAudio(song, ids, trace, apiBase = "https://api.bilibili.com", junkList = DEFAULT_JUNK_WORDS) {
+async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.bilibili.com", junkWords = DEFAULT_JUNK_WORDS) {
   try {
-    const base = apiBase.replace(/\/$/, ""), auth = await getBiliAuth(base);
-    const cookie = auth ? `buvid3=${auth.buvid3}; buvid4=${auth.buvid4}` : "";
-    let bvid = ids.bili || "";
+    const base = biliBase.replace(/\/$/, "");
+    const spiR = await fetchTimeout(`${base}/x/frontend/finger/spi`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, 2600);
+    const spi = (await spiR.json().catch(() => ({})))?.data || {};
+    const cookie = `buvid3=${spi.b_3 || crypto.randomUUID()}; buvid4=${spi.b_4 || ""}`;
 
+    let bvid = ids.bili || "";
     if (!bvid) {
       const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
-      const keyword = `${normalizeName(song.title)} ${cleanArtist}`.trim();
-      let list = [];
-      if (auth && auth.imgKey && auth.subKey) {
-        const qs = await signBiliWbi({ search_type: "video", keyword, page: 1, page_size: 10 }, auth.imgKey, auth.subKey);
-        const sr = await fetchTimeout(`${base}/x/web-interface/wbi/search/type?${qs}`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/", Cookie: cookie } }, 3800);
-        list = (await sr.json().catch(() => ({})))?.data?.result || [];
-      }
-      if (!list.length) {
-        const sr2 = await fetchTimeout(`${base}/x/web-interface/search/type?search_type=video&keyword=${encodeURIComponent(keyword)}&page=1&page_size=10`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/", Cookie: cookie } }, 3800);
-        list = (await sr2.json().catch(() => ({})))?.data?.result || [];
-      }
+      const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
+      const sRes = await fetchTimeout(`${base}/x/web-interface/search/all/v2?keyword=${encodeURIComponent(kw)}`, {
+        headers: { "User-Agent": UA, Referer: "https://search.bilibili.com/", Cookie: cookie },
+      }, 3600);
+      const sJson = await sRes.json();
+      if (sJson.code !== 0) { trace.push(`bili_s:${sJson.code}`); return null; }
+      const vGroup = (sJson?.data?.result || []).find((g) => g.result_type === "video");
+      const list = vGroup?.data || [];
       if (!list.length) { trace.push("bili:no_res"); return null; }
 
-      let best = null, bestSc = -100;
-      const ot = normalizeName(song.title), oa = normalizeName(cleanArtist);
-      for (const it of list) {
-        const title = String(it.title || "").replace(/<[^>]+>/g, ""), dur = parseBiliDur(it.duration);
-        if (dur > 600 || dur < 30) continue;
-        const tLow = title.toLowerCase();
-        if (isJunkTitle(tLow, song.title, junkList)) continue;
-        if (song.duration >= 90 && (dur <= 65 || dur < song.duration * 0.72)) continue;
-        let sc = 0;
-        if (tLow.includes(ot)) sc += 50;
-        if (oa && tLow.includes(oa)) sc += 45;
-        for (const w of SOFT_PENALTY_WORDS) if (tLow.includes(w) && !String(song.title || "").toLowerCase().includes(w)) sc -= 40;
-        if (song.duration > 0) { const diff = Math.abs(dur - song.duration); if (diff <= 5) sc += 45; else if (diff <= 15) sc += 20; else if (diff > 30) sc -= 40; }
-        if (sc > bestSc) { bestSc = sc; best = it; }
+      const noise = ["翻唱", "教学", "吉他", "钢琴", "伴奏", "鬼畜", "reaction", "指弹", "弹唱", "二创", "清唱"];
+      let best = null, bsc = -999;
+      for (const it of list.slice(0, 10)) {
+        const rawT = decodeHtml(String(it.title || "").replace(/<[^>]+>/g, ""));
+        const p = String(it.duration || "").split(":").map(Number);
+        const d = p.length === 2 ? p[0] * 60 + p[1] : (p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : 0);
+        if (d < 30 || d > 600) continue;
+        let sc = scoreCandidate(rawT, rawT + " " + (it.author || ""), song.title, song.artist, d, song.duration, junkWords);
+        for (const nw of noise) if (rawT.toLowerCase().includes(nw) && !song.title.toLowerCase().includes(nw)) sc -= 60;
+        if (rawT.toLowerCase().includes("mv") || rawT.toLowerCase().includes("官方") || rawT.toLowerCase().includes("原版")) sc += 25;
+        if (sc > bsc) { bsc = sc; best = it; }
       }
-      bvid = (best || list[0])?.bvid || "";
+      if (!best || bsc < 10) { trace.push("bili:mismatch"); return null; }
+      bvid = best.bvid;
     }
-    if (!bvid) { trace.push("bili:no_bvid"); return null; }
 
-    const pd = await (await fetchTimeout(`${base}/x/player/pagelist?bvid=${encodeURIComponent(bvid)}`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, 3500)).json().catch(() => ({}));
-    const cid = pd?.data?.[0]?.cid;
+    const vRes = await fetchTimeout(`${base}/x/web-interface/view?bvid=${bvid}`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, 2800);
+    const cid = (await vRes.json())?.data?.cid;
     if (!cid) { trace.push("bili:no_cid"); return null; }
 
     for (const fnval of [4048, 1]) {
-      const pld = await (await fetchTimeout(`${base}/x/player/playurl?bvid=${encodeURIComponent(bvid)}&cid=${cid}&qn=64&fnval=${fnval}&otype=json`, { headers: { "User-Agent": UA, Referer: `https://www.bilibili.com/video/${bvid}`, Cookie: cookie } }, 3800)).json().catch(() => ({}));
-      const audios = pld?.data?.dash?.audio || [];
+      const uRes = await fetchTimeout(`${base}/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64&fnval=${fnval}&otype=json`, { headers: { "User-Agent": UA, Referer: `https://www.bilibili.com/video/${bvid}`, Cookie: cookie } }, 3500);
+      const uData = (await uRes.json())?.data;
+      const audios = uData?.dash?.audio || [];
       if (audios.length) {
         audios.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
-        for (const st of audios) {
-          const u = st.baseUrl || st.base_url || (st.backupUrl && st.backupUrl[0]);
-          if (u) return { url: u, source: "bili", biliId: bvid, needProxy: true, headers: { Referer: "https://www.bilibili.com/", "User-Agent": UA } };
-        }
+        const su = audios[0].baseUrl || audios[0].base_url || audios[0].backupUrl?.[0];
+        if (su) return { url: su, needProxy: true, source: "bili", biliId: bvid };
       }
-      const durl = pld?.data?.durl?.[0]?.url;
-      if (durl) return { url: durl, source: "bili", biliId: bvid, needProxy: true, headers: { Referer: "https://www.bilibili.com/", "User-Agent": UA } };
+      if (uData?.durl?.[0]?.url) return { url: uData.durl[0].url, needProxy: true, source: "bili", biliId: bvid };
     }
     trace.push("bili:no_stream");
-  } catch (e) { trace.push("bili:err:" + (e?.message || "unknown").slice(0, 40)); }
+  } catch (e) { trace.push(`bili:${e.name}`); }
   return null;
 }
 
@@ -833,18 +772,21 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
   }
 
   const skipSet = new Set(String(skip || "").split(",").map((x) => x.trim()).filter(Boolean));
-  if (skipSet.has("kuwo") && ids.kuwo) {
-    delete ids.kuwo;
-    song = { ...song, source_ids_json: JSON.stringify(ids) };
-  }
+  if (skipSet.has("kuwo") && ids.kuwo) { delete ids.kuwo; song = { ...song, source_ids_json: JSON.stringify(ids) }; }
+
+  // 第 0 秒同步启动 B 站兜底，避免主源全部失败后再等 3 秒
+  const biliP = isEnabled("bili")
+    ? fallbackBilibiliAudio(song, ids, trace, srcMap.get("bili")?.endpoint || "https://api.bilibili.com", cfg.junkWords)
+    : Promise.resolve(null);
+
   const raceList = [];
   if (prefer === "kuwo") {
     raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords));
   } else {
     if (!skipSet.has("kuwo")) raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords));
-    if (!skipSet.has("gequbao")) raceList.push(raceGequbao(song, trace, cfg.junkWords));
-    if (!skipSet.has("vkeys") && isEnabled("vkeys")) raceList.push(raceVKeys(song, ids, trace, srcMap.get("vkeys")?.endpoint || "https://api.vkeys.cn/v2/music", cfg.junkWords));
     if (!skipSet.has("gd") && !skipSet.has("gdstudio") && isEnabled("gdstudio")) raceList.push(raceGDStudio(song, ids, trace, srcMap.get("gdstudio")?.endpoint || "https://music-api.gdstudio.xyz/api.php", cfg.junkWords));
+    if (!skipSet.has("vkeys") && isEnabled("vkeys")) raceList.push(raceVKeys(song, ids, trace, srcMap.get("vkeys")?.endpoint || "https://api.vkeys.cn/v2/music", cfg.junkWords));
+    if (!skipSet.has("kugou")) raceList.push(raceBakaKugou(song, trace, cfg.junkWords));
     if (!skipSet.has("meting") && ids.netease) raceList.push(raceMeting("https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, trace));
   }
 
@@ -853,10 +795,8 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
     return { ...winner, trace };
   } catch (e) {
     if (e?.message === "deadline") trace.push("fast:deadline");
-    if (isEnabled("bili")) {
-      const biliHit = await fallbackBilibiliAudio(song, ids, trace, srcMap.get("bili")?.endpoint || "https://api.bilibili.com", cfg.junkWords);
-      if (biliHit) return { ...biliHit, trace };
-    }
+    const biliHit = await biliP;
+    if (biliHit) return { ...biliHit, trace };
     return { error: "可用完整源均未命中", trace };
   }
 }
@@ -1105,15 +1045,15 @@ export default {
         const song = { title: "吻别", artist: "张学友", duration: 306, source_ids_json: '{"netease":"190449"}' };
         const tests = [
           ["kuwo_all", raceKuwoAll(song, {}, [])],
-          ["gequbao", raceGequbao({ title: "青花瓷", artist: "周杰伦", duration: 239 }, [])],
-          ["vkeys", raceVKeys(song, { netease: "190449" }, [])],
           ["gdstudio_xbridge", raceGDStudio(song, { netease: "190449" }, [])],
+          ["baka_kugou", raceBakaKugou(song, [])],
+          ["vkeys_luoyue", raceVKeys(song, { netease: "190449" }, [])],
           ["meting_injahow", raceMeting("https://api.injahow.cn/meting/", "injahow", "190449", 306, [])],
-          ["bili_wbi", fallbackBilibiliAudio({ title: "稻香", artist: "周杰伦", duration: 223 }, {}, [])],
+          ["bili_all_v2", (async () => { const t = []; const r = await fallbackBilibiliAudio({ title: "稻香", artist: "周杰伦", duration: 223 }, {}, t); if (!r) throw new Error(t.join(",") || "empty"); return r; })()],
         ];
         const report = await Promise.all(tests.map(async ([name, p]) => {
           const t0 = Date.now();
-          try { const r = await p; return (!r || !r.url) ? { name, ok: false, ms: Date.now() - t0, error: "empty" } : { name, ok: true, ms: Date.now() - t0, source: r.source, url: r.url.slice(0, 70) }; }
+          try { const r = await p; return { name, ok: true, ms: Date.now() - t0, source: r.source, url: r.url.slice(0, 70) }; }
           catch (e) { return { name, ok: false, ms: Date.now() - t0, error: e.message }; }
         }));
         return json({ report });
