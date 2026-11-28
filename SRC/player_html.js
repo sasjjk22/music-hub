@@ -1299,7 +1299,7 @@ function fetchDirectGD(s, plat, label, seq) {
     return fetch(url, controller ? { signal: controller.signal } : {}).finally(function(){ if (timer) clearTimeout(timer); });
   }
   var strictIdentity = isStrictSongLocal(s);
-  var p = (plat === "netease" && !strictIdentity && s.ext_source === "netease" && s.ext_id)
+  var p = (plat === "netease" && s.ext_source === "netease" && s.ext_id)
     ? Promise.resolve(s.ext_id)
     : directFetch(searchUrl)
         .then(function(r) { if (!r.ok) throw new Error("搜索 HTTP " + r.status); if (!(r.headers.get("content-type") || "").toLowerCase().includes("json")) throw new Error("搜索非JSON响应"); return r.json(); })
@@ -1638,6 +1638,8 @@ document.addEventListener("keydown", function(e) {
   else if (e.key === "ArrowRight" && audio.duration) { audio.currentTime = Math.min(audio.duration, audio.currentTime + 5); }
   else if (e.key === "m" || e.key === "M") { toggleMute(); }
 });
+
+["sCov", "dCov"].forEach(function(id) { var img = document.getElementById(id); if (img) img.onerror = function() { this.onerror = null; this.src = DEFAULT_COV; }; });
 
 syncDbgBtn();
 if (urlDbgFlag) toggleDebugWin(true);
