@@ -2142,8 +2142,8 @@ export default {
       const shareRoute = path.match(/^\/s\/([^/]+)\/(musicfree\.json|music-hub\.js|lx-source\.js|bili\.js|kuwo\.js|msr\.js)$/);
       if (shareRoute) { pathToken = decodeURIComponent(shareRoute[1]); path = "/" + shareRoute[2]; }
 
-      if (path === "/" || path === "/player") return html(PLAYER_HTML, 200, { "Cache-Control": "public, max-age=180" });
-      if (path === "/admin") return html(ADMIN_HTML, 200, { "Cache-Control": "public, max-age=180" });
+      if (path === "/" || path === "/player") return html(PLAYER_HTML, 200, { "Cache-Control": "public, max-age=0, must-revalidate" });
+      if (path === "/admin") return html(ADMIN_HTML, 200, { "Cache-Control": "public, max-age=0, must-revalidate" });
       if (path === "/health") return json({ name: "Music Hub API", status: "ok", time: Date.now() });
 
       if (path === "/api/admin/login" && request.method === "POST") {
@@ -2411,18 +2411,23 @@ export default {
       }
 
       if (path === "/api/home") {
-        const cfg = await getRuntimeCfg(env);
-        const canDebug = await isDebugAllowed(request, env, cfg);
-        return withEdgeCache(ctx, `/home/${canDebug ? "d1" : "d0"}`, 600, async (ttl) => {
+        const [dbgRow, isAdm] = await Promise.all([
+          env.DB.prepare("SELECT value FROM settings WHERE key = 'player_debug'").first().catch(() => null),
+          checkAdmin(request, env),
+        ]);
+        const canDebug = (dbgRow?.value === "1") || isAdm;
+        const chartsResp = await withEdgeCache(ctx, "/home_charts", 600, async () => {
           const { results } = await env.DB.prepare("SELECT id, title, category, cover, description FROM charts ORDER BY sort_order ASC").all();
-          return json({
-            charts: (results || []).map((c) => ({ ...c, cover: httpsCover(c.cover) })),
-            artists: PRESET_ARTISTS,
-            sheetTags: SHEET_TAGS,
-            radioStations: RADIO_STATIONS,
-            playerDebug: Boolean(canDebug),
-          }, 200, { "Cache-Control": `public, max-age=${ttl}` });
+          return json({ charts: (results || []).map((c) => ({ ...c, cover: httpsCover(c.cover) })) });
         });
+        const chartsData = await chartsResp.json();
+        return json({
+          charts: chartsData.charts || [],
+          artists: PRESET_ARTISTS,
+          sheetTags: SHEET_TAGS,
+          radioStations: RADIO_STATIONS,
+          playerDebug: Boolean(canDebug),
+        }, 200, { "Cache-Control": "private, no-store" });
       }
       if (path === "/api/radio") {
         const payload = request.method === "POST" ? await request.json().catch(() => ({})) : { mode: url.searchParams.get("mode") || "quiet", artists: (url.searchParams.get("artists") || "").split(",").filter(Boolean), ids: (url.searchParams.get("ids") || "").split(",").filter(Boolean), cats: (url.searchParams.get("cats") || "").split(",").filter(Boolean), exclude: (url.searchParams.get("exclude") || "").split(",").filter(Boolean), needSheets: url.searchParams.get("needSheets") === "1" };
@@ -2713,6 +2718,17 @@ export default {
 
         const cfg = await getRuntimeCfg(env);
         const debugAllowed = wantDebug && (await isDebugAllowed(request, env, cfg));
+        if (url.searchParams.get("all") === "1") {
+          const allRes = await resolveAllPlayUrls(song, quality, env, debugAllowed);
+          const token = getTokenFromReq(request, pathToken);
+          const wrapped = await Promise.all(allRes.sources.map(async (item) => {
+            const needProxy = Boolean(item.needProxy || item.url.startsWith("http://"));
+            const stoken = await createStreamToken(item.url, env, 1800);
+            const proxyUrl = `${url.origin}/api/stream?u=${encodeURIComponent(item.url)}&src=${encodeURIComponent(item.source || "")}&stoken=${encodeURIComponent(stoken)}${token ? "&token=" + encodeURIComponent(token) : ""}`;
+            return { ...item, needProxy, proxyUrl };
+          }));
+          return json({ ok: true, songId: id, tier: allRes.tier, sources: wrapped, ...(debugAllowed ? { debugSources: allRes.debugSources } : {}) }, 200, { "Cache-Control": "private, no-store" });
+        }
 
         const cache = caches.default, cacheKey = new Request(`${CACHE_PREFIX}/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
         let resolved = null;
