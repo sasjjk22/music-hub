@@ -343,12 +343,51 @@ function miguCandidate(item) {
     copyrightId: String(item.copyrightId || item.cpId || ""),
     duration: miguSeconds(item.duration || item.interval || item.songTime || 0),
     cover: String(item.imgItems?.[0]?.img || item.albumPic || item.picUrl || item.cover || ""),
+    raw: item,
   };
 }
 async function miguJson(url) {
   const { data } = await axios.get(url, { headers: { "User-Agent": UA, Accept: "application/json, text/plain, */*", Referer: "https://music.migu.cn/", ua: "Android_migu", version: "5.0.1" }, timeout: 6500 });
   if (!data || typeof data !== "object") throw new Error("Migu invalid response");
   return data;
+}
+const MIGU_RESPONSE_KEY = "Jk8qzuePiJ1qE3mDYhLQ3T73DtDoAhLP";
+async function miguSignedJson(url) {
+  const response = await axios.get(url, {
+    headers: {
+      "User-Agent": UA, Accept: "application/json, text/plain, */*",
+      "Content-Type": "application/json;charset=UTF-8", Origin: "https://h5.nf.migu.cn",
+      Referer: "https://h5.nf.migu.cn/", birth: "h5page", signature: "1",
+      ua: "Android_migu", version: "5.0.1",
+    },
+    timeout: 5500, responseType: "arraybuffer",
+  });
+  const bytes = new Uint8Array(response.data || []);
+  if (!bytes.length) throw new Error("Migu empty listen response");
+  const hasMagic = bytes.length >= 4 && bytes[0] === 0xab && bytes[1] === 0xcd && bytes[2] === 0x01;
+  const signed = String(response.headers?.signature || "") === "1" || hasMagic;
+  let decoded = bytes;
+  if (signed) {
+    if (bytes.length < 5) throw new Error("Migu invalid signed response");
+    const seed = bytes[3], key = MIGU_RESPONSE_KEY;
+    decoded = new Uint8Array(bytes.length - 4);
+    for (let i = 0; i < decoded.length; i++) decoded[i] = (bytes[i + 4] + seed - key.charCodeAt(i % key.length)) & 0xff;
+  }
+  const text = new TextDecoder().decode(decoded);
+  return JSON.parse(text);
+}
+function miguRateOptions(item) {
+  const raw = item?.formatRaw || item?.raw || {};
+  const all = [raw.rateFormats, raw.newRateFormats, raw.audioFormats].filter(Array.isArray).flat();
+  const rank = { HQ: 3, PQ: 2, LQ: 1 }, byKey = new Map();
+  for (const f of all) {
+    const toneFlag = String(f?.formatType || f?.toneFlag || "").toUpperCase();
+    const resourceType = String(f?.resourceType || "");
+    if (!rank[toneFlag] || !resourceType) continue;
+    byKey.set(`${toneFlag}:${resourceType}`, { toneFlag, resourceType });
+  }
+  const found = [...byKey.values()].sort((a, b) => rank[b.toneFlag] - rank[a.toneFlag]);
+  return found.length ? found.slice(0, 3) : [{ toneFlag: "HQ", resourceType: "2" }, { toneFlag: "PQ", resourceType: "2" }];
 }
 function miguItems(raw) {
   const root = raw?.data || raw;
@@ -414,23 +453,33 @@ async function tryMiguDirect(musicItem) {
         try {
           const raw = await miguJson(endpoint), root = raw?.data || raw;
           const x = miguCandidate(root?.resource?.[0] || raw?.resource?.[0] || root?.resource || root?.songInfo || root?.song);
-          if (x?.copyrightId) { detail = { ...hit, ...x, contentId: x.contentId || hit.contentId }; break; }
+          if (x?.copyrightId) { detail = { ...hit, ...x, formatRaw: hit.raw, raw: x.raw || hit.raw, contentId: x.contentId || hit.contentId }; break; }
         } catch (_) {}
       }
     }
     if (!detail.copyrightId) return null;
-    for (const tone of ["HQ", "PQ"]) {
-      const endpoints = [
-        `${MIGU_BASE}/MIGUM2.0/v2.0/content/listen-url?netType=01&toneFlag=${tone}&copyrightId=${encodeURIComponent(detail.copyrightId)}&contentId=${encodeURIComponent(detail.contentId)}`,
-        `${MIGU_BASE}/MIGUM3.0/strategy/pc/listen/v1.0?scene=&netType=01&resourceType=2&copyrightId=${encodeURIComponent(detail.copyrightId)}&contentId=${encodeURIComponent(detail.contentId)}&toneFlag=${tone}`,
-      ];
-      for (const endpoint of endpoints) {
-        try {
-          const raw = await miguJson(endpoint), data = raw?.data || raw;
-          const url = data?.url || data?.listenUrl || data?.playUrl || data?.audioUrl || data?.songUrl;
-          if (typeof url === "string" && /^https?:\/\//i.test(url)) return { url, headers: { Referer: "https://music.migu.cn/", "User-Agent": UA } };
-        } catch (_) {}
-      }
+    for (const format of miguRateOptions(detail)) {
+      const params = new URLSearchParams({
+        contentId: String(detail.contentId), copyrightId: String(detail.copyrightId),
+        resourceType: format.resourceType, netType: "01", toneFlag: format.toneFlag,
+        scene: "", lowerQualityContentId: String(detail.contentId),
+      });
+      try {
+        const raw = await miguSignedJson(`https://c.musicapp.migu.cn/strategy/listen-url/h5/v2.4?${params}`);
+        const data = raw?.data || raw?.result || raw;
+        const url = data?.url || data?.listenUrl || data?.playUrl || data?.audioUrl || data?.songUrl || data?.urlInfo?.url;
+        if (typeof url === "string" && /^https?:\/\//i.test(url)) return { url, headers: { Referer: "https://h5.nf.migu.cn/", Origin: "https://h5.nf.migu.cn/", "User-Agent": UA } };
+      } catch (_) {}
+    }
+    // Secondary official PC strategy endpoint, still using the resourceType
+    // advertised by Migu's search result.
+    for (const format of miguRateOptions(detail).slice(0, 2)) {
+      const params = new URLSearchParams({ scene: "", netType: "01", resourceType: format.resourceType, copyrightId: String(detail.copyrightId), contentId: String(detail.contentId), toneFlag: format.toneFlag });
+      try {
+        const raw = await miguJson(`${MIGU_BASE}/MIGUM3.0/strategy/pc/listen/v1.0?${params}`), data = raw?.data || raw;
+        const url = data?.url || data?.listenUrl || data?.playUrl || data?.audioUrl || data?.songUrl;
+        if (typeof url === "string" && /^https?:\/\//i.test(url)) return { url, headers: { Referer: "https://h5.nf.migu.cn/", Origin: "https://h5.nf.migu.cn/", "User-Agent": UA } };
+      } catch (_) {}
     }
   } catch (_) {}
   return null;
@@ -439,7 +488,7 @@ async function tryMiguDirect(musicItem) {
 module.exports = {
   platform: "MusicHub·全网聚合",
   author: "MusicHub",
-  version: "1.0.4",
+  version: "1.0.5",
   cacheControl: "no-cache",
   supportedSearchType: ["music"],
 

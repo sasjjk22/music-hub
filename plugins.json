@@ -4,7 +4,7 @@
     {
       "name": "MusicHub·全网聚合",
       "url": "https://cdn.jsdelivr.net/gh/sasjjk22/music-hub@main/plugins/music-hub-agg.js",
-      "version": "1.0.4"
+      "version": "1.0.5"
     },
     {
       "name": "MusicHub·B站音频(WBI修复)",

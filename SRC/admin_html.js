@@ -119,6 +119,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   <button class="tab active" id="t-overview" onclick="switchTab('overview')">概览与音源池</button>
   <button class="tab" id="t-subs" onclick="switchTab('subs')">订阅与二维码</button>
   <button class="tab" id="t-songs" onclick="switchTab('songs')">曲库管理</button>
+  <button class="tab" id="t-resolve" onclick="switchTab('resolve')">歌曲抓取实验室</button>
   <button class="tab" id="t-lyrics" onclick="switchTab('lyrics')">歌词库管理</button>
   <button class="tab" id="t-charts" onclick="switchTab('charts')">榜单管理</button>
 </div>
@@ -184,10 +185,11 @@ function doLogin() {
 function logout() { sessionStorage.removeItem("mh_admin_tk"); ATOKEN = ""; renderLogin(""); }
 function switchTab(t) {
   curTab = t;
-  ["overview", "subs", "songs", "lyrics", "charts"].forEach(function(k) { var el = document.getElementById("t-" + k); if (el) el.classList.toggle("active", k === t); });
+  ["overview", "subs", "songs", "resolve", "lyrics", "charts"].forEach(function(k) { var el = document.getElementById("t-" + k); if (el) el.classList.toggle("active", k === t); });
   if (t === "overview") renderOverview();
   else if (t === "subs") renderSubsTab();
   else if (t === "songs") renderSongsTab();
+  else if (t === "resolve") renderResolveTab();
   else if (t === "lyrics") renderLyricsTab();
   else if (t === "charts") renderChartsTab();
 }
@@ -329,6 +331,69 @@ function saveSyncCfg() {
   });
 }
 function saveJunk() { req("/api/admin/settings", { method: "POST", body: JSON.stringify({ junkWords: document.getElementById("junkIn").value }) }).then(function(){ toast("过滤词已保存"); }); }
+
+var lastResolveDebug = null;
+function renderResolveTab() {
+  var h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><div><h3>歌曲抓取实验室</h3><p style="font-size:12px;color:var(--muted);margin:0;">粘贴网易云 / 咪咕分享链接，逐源查看元数据、候选匹配、播放授权与音频预检结果。</p></div><span class="badge">仅管理员可见</span></div>' +
+    '<div class="tip-box">分享页链接通常只是歌曲页面和歌曲 ID，不等于 MP3 音频直链。本工具会提取 ID、调用平台公开元数据接口，再测试各解析源正常返回的播放地址；不会绕过会员/付费限制，不会把签名播放 URL 展示或保存，也不会写入 D1 或缓存。</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:14px;">' +
+    '<label style="font-size:12px;color:var(--muted);">分享链接<input id="dbgShareUrl" style="display:block;width:100%;margin-top:5px;" value="https://y.music.163.com/m/song?id=4194" placeholder="粘贴 y.music.163.com 或 h5.nf.migu.cn 分享链接" /></label>' +
+    '<label style="font-size:12px;color:var(--muted);">歌曲名<input id="dbgTitle" style="display:block;width:100%;margin-top:5px;" value="七里香" placeholder="歌曲名" /></label>' +
+    '<label style="font-size:12px;color:var(--muted);">歌手<input id="dbgArtist" style="display:block;width:100%;margin-top:5px;" value="周杰伦" placeholder="歌手" /></label>' +
+    '<label style="font-size:12px;color:var(--muted);">原曲时长（秒，可留空自动获取）<input id="dbgDuration" type="number" min="0" max="3600" style="display:block;width:100%;margin-top:5px;" placeholder="例如 295" /></label>' +
+    '</div><div class="row" style="margin-top:12px;"><button id="dbgRunBtn" onclick="runResolveDebug()">开始抓取诊断</button><button class="ghost" onclick="loadMiguDebugSample()">载入《一路向北》样例</button><button class="ghost" onclick="loadNeteaseDebugSample()">载入《七里香》样例</button><button class="ghost" onclick="copyResolveDebug()">复制诊断结果</button></div></div>' +
+    '<div class="card"><h3>抓取结果</h3><div id="resolveDebugResult" style="font-size:13px;color:var(--muted);">等待执行。建议先用《七里香》分享链接测试。</div></div>';
+  document.getElementById("main").innerHTML = h;
+}
+function renderResolveDebugResult(data) {
+  lastResolveDebug = data;
+  var song = data.song || {}, meta = data.metadata || {}, sum = data.summary || {};
+  var h = '<div class="grid" style="margin-bottom:12px;">' +
+    '<div class="stat"><b>' + (data.ms || 0) + 'ms</b><span>总耗时</span></div>' +
+    '<div class="stat"><b>' + ((sum.resolvedSources || []).length) + '</b><span>命中音源</span></div>' +
+    '<div class="stat"><b>' + (song.difficulty ? ('Lv' + song.difficulty) : '-') + '</b><span>歌曲难度</span></div></div>';
+  if (data.error) h += '<div class="err">' + esc(data.error) + '</div>';
+  if (data.share) h += '<div class="tip-box">分享链接识别：' + esc(data.share.platform || '失败') + ' · ID：' + esc(data.share.id || '-') + ' · ' + esc(data.share.error || '仅提取 ID，未抓取任意外部网页') + '</div>';
+  if (meta.platform) h += '<div class="tip-box"><b>' + esc(meta.platform) + ' 元数据：' + (meta.ok ? '<span class="badge ok">成功</span>' : '<span class="badge blk">失败</span>') + '</b><br>' + esc(meta.title || '') + ' / ' + esc(meta.artist || '') + ' / ' + esc(meta.album || '') + ' / ' + esc(meta.duration || 0) + 's<br>ID：' + esc(meta.id || '') + ' · ' + esc(meta.error || '') + (meta.formats ? '<br>平台声明音质：' + esc(meta.formats.map(function(x){return x.toneFlag;}).join('/')) : '') + '</div>';
+  if (song.title) h += '<div class="tip-box"><b>本次目标：</b>' + esc(song.title) + ' / ' + esc(song.artist) + ' / ' + esc(song.duration) + 's · 已带入 ID：' + esc(JSON.stringify(song.ids || {})) + (song.shareMetadataIdentity ? '<br>分享 ID 身份校验：' + (song.shareMetadataIdentity.ok ? '<span class="badge ok">匹配</span>' : '<span class="badge miss">不匹配 / 时长差异</span>') + '（标题 ' + song.shareMetadataIdentity.titleMatch + '，歌手 ' + song.shareMetadataIdentity.artistMatch + '，时长 ' + song.shareMetadataIdentity.durationMatch + '）' : '') + '</div>';
+  h += '<div class="tbl-wrap"><table style="min-width:620px;"><thead><tr><th>音源</th><th>状态</th><th>耗时</th><th>结果</th></tr></thead><tbody>';
+  (data.sourceResults || []).forEach(function(r) {
+    var badge = r.ok ? '<span class="badge ok">成功</span>' : (r.status === 'disabled' ? '<span class="badge">停用</span>' : (r.status === 'skipped_no_netease_id' ? '<span class="badge">跳过</span>' : '<span class="badge blk">失败</span>'));
+    var result = r.ok ? (esc(r.result.source) + (r.result.audio ? ' · ' + esc(r.result.audio.host) + ' · ' + esc(r.result.audio.extension) : '')) : esc(r.error || r.status || '失败');
+    h += '<tr><td><b>' + esc(r.name) + '</b></td><td>' + badge + '</td><td>' + esc(r.ms || 0) + 'ms</td><td style="word-break:break-word;">' + result + '</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  (data.sourceResults || []).forEach(function(r) {
+    h += '<details style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px;"><summary style="cursor:pointer;font-weight:700;">' + esc(r.name) + ' 详细过程（' + esc((r.trace || []).length) + ' 条）</summary><pre style="white-space:pre-wrap;overflow:auto;max-height:260px;font-size:11px;line-height:1.5;background:var(--stat);padding:10px;border-radius:8px;">' + esc((r.trace || []).join("\\n") || '无额外日志') + '</pre></details>';
+  });
+  h += '<details style="margin-top:12px;"><summary style="cursor:pointer;">完整 JSON（已隐藏真实签名播放 URL）</summary><pre style="white-space:pre-wrap;overflow:auto;max-height:420px;font-size:11px;background:var(--stat);padding:12px;border-radius:8px;">' + esc(JSON.stringify(data, null, 2)) + '</pre></details>';
+  document.getElementById("resolveDebugResult").innerHTML = h;
+}
+function runResolveDebug() {
+  var btn = document.getElementById("dbgRunBtn"), out = document.getElementById("resolveDebugResult");
+  var payload = { shareUrl: document.getElementById("dbgShareUrl").value.trim(), title: document.getElementById("dbgTitle").value.trim(), artist: document.getElementById("dbgArtist").value.trim(), duration: Number(document.getElementById("dbgDuration").value || 0) };
+  btn.disabled = true; btn.textContent = "正在抓取各源…";
+  out.innerHTML = '<div class="tip-box">正在解析分享 ID、读取公开歌曲元数据，并并行测试各音源。复杂歌曲可能需要十几秒。此过程不会修改曲库。</div>';
+  req("/api/admin/resolve-debug", { method: "POST", body: JSON.stringify(payload) }).then(renderResolveDebugResult).catch(function(e) { out.innerHTML = '<div class="err">诊断请求失败：' + esc(e.message) + '</div>'; }).finally(function() { btn.disabled = false; btn.textContent = "开始抓取诊断"; });
+}
+function loadMiguDebugSample() {
+  document.getElementById("dbgShareUrl").value = "https://h5.nf.migu.cn/app/v4/p/share/song/index.html?id=60054701958";
+  document.getElementById("dbgTitle").value = "一路向北";
+  document.getElementById("dbgArtist").value = "周杰伦";
+  document.getElementById("dbgDuration").value = "296";
+}
+function loadNeteaseDebugSample() {
+  document.getElementById("dbgShareUrl").value = "https://y.music.163.com/m/song?id=4194";
+  document.getElementById("dbgTitle").value = "七里香";
+  document.getElementById("dbgArtist").value = "周杰伦";
+  document.getElementById("dbgDuration").value = "295";
+}
+function copyResolveDebug() {
+  if (!lastResolveDebug) return toast("还没有诊断结果");
+  var text = JSON.stringify(lastResolveDebug, null, 2);
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function(){ toast("已复制诊断 JSON"); }).catch(function(){ toast("复制失败，请展开 JSON 手动复制"); });
+  else toast("请展开完整 JSON 手动复制");
+}
 
 function renderSongsTab() {
   var cats = (dashData.categories || []).map(function(c) { return '<option value="' + esc(c.category) + '">' + esc(c.category) + ' (' + c.c + ')</option>'; }).join("");
