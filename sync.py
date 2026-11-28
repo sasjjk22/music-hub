@@ -18,6 +18,19 @@ NE_HEADERS = {
 DEFAULT_JUNK_WORDS = ("dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x")
 LRC_MISS_TTL_SEC = 14 * 86400
 
+TRAD_SIMP_LIST = (
+    "啞哑", "謙谦", "傑杰", "倫伦", "陳陈", "張张", "劉刘", "楊杨", "趙赵", "黃黄", "吳吴", "鄭郑", "孫孙", "馬马", "羅罗",
+    "葉叶", "蘇苏", "蔣蒋", "韓韩", "馮冯", "鄧邓", "蕭萧", "謝谢", "許许", "盧卢", "韋韦", "莊庄", "嚴严", "鍾钟", "麥麦",
+    "歐欧", "陽阳", "溫温", "藍蓝", "齊齐", "學学", "榮荣", "麗丽", "龍龙", "遙遥", "輝辉", "闊阔", "問问", "戀恋", "蘭兰",
+    "煉炼", "單单", "愛爱", "說说", "聽听", "後后", "來来", "這这", "為为", "們们", "無无", "樂乐", "夢梦", "風风", "飛飞",
+    "開开", "關关", "門门", "長长", "時时", "見见", "還还", "過过", "對对", "錯错", "點点", "線线", "書书", "寫写", "語语",
+    "話话", "詞词", "調调", "聲声", "響响", "誰谁", "麼么", "裡里", "邊边", "頭头", "臉脸", "淚泪", "傷伤", "獨独", "員员",
+    "國国", "華华", "東东", "萬万", "億亿", "雙双", "與与", "給给", "讓让", "願愿", "會会", "該该", "經经", "總总", "結结",
+    "終终", "離离", "別别", "記记", "憶忆", "懷怀", "變变", "動动", "靜静", "歡欢", "難难", "實实", "虛虚", "輕轻", "遠远",
+    "舊旧", "歲岁", "晝昼", "顏颜", "紅红", "綠绿", "銀银", "鐵铁", "銅铜", "鋼钢", "網网", "雲云", "電电",
+)
+TRAD_SIMP_MAP = str.maketrans({p[0]: p[1] for p in TRAD_SIMP_LIST})
+
 NETEASE_CHARTS = [
     ("3778678", "热歌榜", "核心榜单", "华语", 10, 120),
     ("19723756", "飙升榜", "核心榜单", "华语", 15, 100),
@@ -138,15 +151,26 @@ def load_sync_settings():
     }
 
 
+def to_simplified(s):
+    return str(s or "").translate(TRAD_SIMP_MAP)
+
+
+def https_cover(u):
+    s = str(u or "")
+    if s.startswith("http://") and "music.126.net" in s:
+        return "https://" + s[7:]
+    return s
+
+
 def norm_text(s):
-    raw = (s or "").lower().strip()
+    raw = to_simplified(s).lower().strip()
     stripped = re.sub(r"[\(（\[【].*?[\)）\]】]", "", raw)
     stripped = re.sub(r"\s+", " ", stripped).strip()
-    return stripped or re.sub(r"[\(\)\[\]（）【】\s]+", " ", raw).strip()
+    return stripped or re.sub(r"\s+", " ", re.sub(r"[\(\)\[\]（）【】]", "", raw)).strip()
 
 
 def norm_title_for_key(s):
-    raw = (s or "").lower().strip()
+    raw = to_simplified(s).lower().strip()
     variants = []
     for seg in re.findall(r"[\(（\[【]([^\)）\]】]+)[\)）\]】]", raw):
         if re.search(r"(live|现场|演唱会|remix|dj|伴奏|纯音乐|钢琴|吉他|弹唱|翻唱|cover|加速|降调|清唱|night version)", seg, re.I):
@@ -163,15 +187,17 @@ def make_norm_key(title, artist):
 def is_junk(title, junk_words):
     if not junk_words:
         return False
-    t = (title or "").lower()
+    t = to_simplified(title).lower()
     return any(w in t for w in junk_words)
 
 
 def clean_lrc(raw):
     if not raw:
         return ""
+    text = str(raw).lstrip("\ufeff")
+    text = re.sub(r"\[(\d{1,3}:\d{2}):(\d{1,3})\]", r"[\1.\2]", text)
     bad_meta = ("作词 :", "作曲 :", "编曲 :", "制作人 :", "作词:", "作曲:", "作词：", "作曲：", "QQ音乐", "网易云")
-    lines = [line for line in raw.splitlines() if not any(k in line for k in bad_meta)]
+    lines = [line for line in text.splitlines() if not any(k in line for k in bad_meta)]
     return "\n".join(lines).strip()
 
 
@@ -191,7 +217,7 @@ def fetch_lrclib(title, artist):
         clean_artist = re.split(r"[/,、]|\s+&\s+", artist or "")[0].strip()
         qs = urllib.parse.urlencode({"track_name": norm_text(title), "artist_name": clean_artist})
         data = http_json(f"https://lrclib.net/api/get?{qs}", timeout=8, retries=1)
-        return data.get("syncedLyrics") or data.get("plainLyrics") or ""
+        return clean_lrc(data.get("syncedLyrics") or data.get("plainLyrics") or "")
     except Exception:
         return ""
 
@@ -286,7 +312,7 @@ def crawl_netease_charts(songs_map, charts_list, chart_max, junk_words):
             score = max(10, 1000 - idx * 5)
             nid = str(t["id"])
             alb = t.get("al") or t.get("album") or {}
-            cov = (alb.get("picUrl") or "").replace("http://", "https://") if "music.126.net" in (alb.get("picUrl") or "") else (alb.get("picUrl") or "")
+            cov = https_cover(alb.get("picUrl") or "")
             dur = round((t.get("dt") or t.get("duration") or 0) / 1000)
             if nk not in songs_map:
                 songs_map[nk] = {
@@ -315,7 +341,7 @@ def crawl_netease_charts(songs_map, charts_list, chart_max, junk_words):
                 "id": f"ne_{cid}",
                 "title": c_title,
                 "category": c_cat,
-                "cover": pl.get("coverImgUrl", ""),
+                "cover": https_cover(pl.get("coverImgUrl", "")),
                 "description": (pl.get("description") or "")[:120],
                 "norm_keys": keys,
                 "sort_order": sort_order,
@@ -340,7 +366,7 @@ def crawl_classic_evergreens(songs_map, charts_list, junk_words):
                 artists = " / ".join(a.get("name", "") for a in (t.get("ar") or []) if a.get("name")) or "未知歌手"
                 nk = make_norm_key(title, artists)
                 alb = t.get("al") or {}
-                cov = alb.get("picUrl", "")
+                cov = https_cover(alb.get("picUrl", ""))
                 if cov and not first_cover:
                     first_cover = cov
                 nid = str(t["id"])
