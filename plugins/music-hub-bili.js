@@ -1,7 +1,6 @@
 "use strict";
 const axios = require("axios");
 const CryptoJS = require("crypto-js");
-const he = require("he");
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
@@ -18,17 +17,16 @@ let cache = { buvid3: "", buvid4: "", imgKey: "", subKey: "", ts: 0 };
 async function ensureAuth() {
   const now = Date.now();
   if (cache.buvid3 && cache.imgKey && now - cache.ts < 1800 * 1000) return cache;
-  const [spiRes, navRes] = await Promise.all([
-    axios.get("https://api.bilibili.com/x/frontend/finger/spi", {
-      headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" },
-      timeout: 6000,
-    }),
-    axios.get("https://api.bilibili.com/x/web-interface/nav", {
-      headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" },
-      timeout: 6000,
-    }),
-  ]);
+  const spiRes = await axios.get("https://api.bilibili.com/x/frontend/finger/spi", {
+    headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" },
+    timeout: 6000,
+  });
   const spi = spiRes.data?.data || {};
+  const cookie = `buvid3=${spi.b_3 || ""}; buvid4=${spi.b_4 || ""}`;
+  const navRes = await axios.get("https://api.bilibili.com/x/web-interface/nav", {
+    headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/", Cookie: cookie },
+    timeout: 6000,
+  });
   const wbi = navRes.data?.data?.wbi_img || {};
   cache = {
     buvid3: spi.b_3 || "",
@@ -53,7 +51,15 @@ function wbiQuery(params, imgKey, subKey) {
 }
 
 function stripTags(str) {
-  return he.decode(String(str || "").replace(/<[^>]+>/g, ""));
+  return String(str || "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .trim();
 }
 
 function toSeconds(dur) {
@@ -66,7 +72,7 @@ function toSeconds(dur) {
 module.exports = {
   platform: "MusicHub·B站音频",
   author: "MusicHub",
-  version: "1.0.0",
+  version: "1.0.1",
   cacheControl: "no-cache",
   supportedSearchType: ["music"],
 
@@ -90,9 +96,10 @@ module.exports = {
       }
     );
     const rawList = data?.data?.result || [];
+    const ql = String(query || "").toLowerCase();
     const list = rawList.filter((item) => {
       const title = stripTags(item.title).toLowerCase();
-      return !["翻唱", "cover", "吉他", "钢琴", "弹唱", "教学", "伴奏", "二创"].some((w) => title.includes(w));
+      return !["翻唱", "cover", "吉他", "钢琴", "弹唱", "教学", "伴奏", "二创"].some((w) => title.includes(w) && !ql.includes(w));
     });
     return {
       isEnd: rawList.length < 20,
@@ -135,30 +142,56 @@ module.exports = {
       }
     );
     const audios = data?.data?.dash?.audio || [];
-    if (!audios.length) throw new Error("未获取到B站音频流");
+    if (audios.length) {
+      audios.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+      const idx =
+        quality === "low"
+          ? audios.length - 1
+          : quality === "standard"
+          ? Math.min(1, audios.length - 1)
+          : 0;
+      const picked = audios[idx] || audios[0];
+      const url = picked.baseUrl || picked.base_url || picked.backupUrl?.[0];
+      if (url) {
+        return {
+          url,
+          headers: { Referer: "https://www.bilibili.com/", "User-Agent": UA },
+          userAgent: UA,
+        };
+      }
+    }
 
-    // 按带宽排序并根据音质自适应（修复 4 档变 3 档造成的越界空链）
-    audios.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
-    const idx =
-      quality === "low"
-        ? audios.length - 1
-        : quality === "standard"
-        ? Math.min(1, audios.length - 1)
-        : 0;
-    const picked = audios[idx] || audios[0];
-    const url = picked.baseUrl || picked.base_url || picked.backupUrl?.[0];
-
-    return {
-      url,
-      headers: { Referer: "https://www.bilibili.com/", "User-Agent": UA },
-      userAgent: UA,
-    };
+    const mp4Res = await axios.get(
+      `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64&fnval=1&otype=json`,
+      {
+        headers: {
+          "User-Agent": UA,
+          Referer: `https://www.bilibili.com/video/${bvid}`,
+          Cookie: cookie,
+        },
+        timeout: 8000,
+      }
+    );
+    const durl = mp4Res.data?.data?.durl?.[0]?.url;
+    if (durl) {
+      return {
+        url: durl,
+        headers: { Referer: "https://www.bilibili.com/", "User-Agent": UA },
+        userAgent: UA,
+      };
+    }
+    throw new Error("未获取到B站音频流");
   },
 
   async getLyric(musicItem) {
     try {
+      const cleanQ = stripTags(musicItem.title)
+        .replace(/[\(（\[【].*?[\)）\]】]/g, "")
+        .trim()
+        .split(/\s+/)[0];
+      if (!cleanQ) return { rawLrc: "" };
       const { data } = await axios.get("https://lrclib.net/api/search", {
-        params: { q: musicItem.title },
+        params: { q: cleanQ },
         timeout: 5000,
       });
       if (Array.isArray(data) && data[0]) {
