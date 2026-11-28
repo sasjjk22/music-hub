@@ -369,7 +369,7 @@ var viewSongs = [], playQueue = [], curIdx = -1, curSong = null, lrcRows = [], t
 var playMode = localStorage.getItem("mh_mode") || "loop";
 var candidates = [], curCandIdx = -1, playSeq = 0, autoWaitMeta = false, cloudDone = false, cloudStarted = false;
 var curTabName = "discover", backTarget = "discover", lastSharedData = null;
-var cloudSkips = [], cloudRetries = 0;
+var cloudSkips = [], cloudRetries = 0, allCloudSeq = 0;
 var userLrcScrollUntil = 0, toastTimer = null, radioMode = "", radioFetching = false, recLoading = false;
 var pageState = { type: "", query: "", page: 1, hasMore: false, artistAlbums: [], artistSongs: [], artistTab: "songs", artistName: "", artistTag: "" };
 
@@ -1402,16 +1402,47 @@ function fetchCloudPlay(s, seq, immediate, reason) {
       pickCandidate(0, true);
       toast("该曲暂无完整版，已播放可用短版/试听");
     }
+    fetchAllCloudSources(s, seq);
   }).catch(function(err) {
     cloudDone = true;
     if (seq === playSeq && dbgOn) dbgLogPlay("err", "云端兜底", "请求异常 (" + (Date.now() - t0) + "ms)", (err && err.message) || String(err));
+    fetchAllCloudSources(s, seq);
   });
+}
+
+function fetchAllCloudSources(s, seq) {
+  if (!s || seq !== playSeq || allCloudSeq === seq) return;
+  allCloudSeq = seq;
+  var dbgOn = isDebugActive();
+  var qUrl = "/api/play?id=" + (s.id || 0) + "&q=high&all=1&ext_source=" + encodeURIComponent(s.ext_source || "") + "&ext_id=" + encodeURIComponent(s.ext_id || "") + "&title=" + encodeURIComponent(s.title || "") + "&artist=" + encodeURIComponent(s.artist || "") + "&album=" + encodeURIComponent(s.album || "") + "&cover=" + encodeURIComponent(s.cover || "") + "&duration=" + (s.duration || 0) + (dbgOn ? "&debug=1" : "");
+  api(qUrl).then(function(res) {
+    if (seq !== playSeq || !res) return;
+    if (res.songId) s.id = res.songId;
+    if (dbgOn && Array.isArray(res.debugSources)) {
+      res.debugSources.forEach(function(ds) {
+        var lv = ds.status === "hit" ? "ok" : (ds.status === "disabled" ? "warn" : "err");
+        dbgLogPlay(lv, "全源:" + ds.source, ds.status + " (" + (ds.ms || 0) + "ms)" + (ds.detail ? " · " + ds.detail : "") + (ds.error ? " · " + ds.error : ""), (ds.trace || []).join("\\n"));
+      });
+    }
+    var list = res.sources || [];
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i];
+      addCandidate(seq, {
+        label: "云端(" + it.source + ")",
+        url: it.needProxy ? it.proxyUrl : it.url,
+        rawUrl: it.url,
+        rawSrc: it.source,
+        isTrial: false,
+        cloudSource: it.source
+      });
+    }
+  }).catch(function(){});
 }
 
 function playQueueIdx(idx) {
   if (idx < 0 || idx >= playQueue.length) return;
   curIdx = idx; var s = playQueue[idx]; curSong = s;
-  playSeq++; var seq = playSeq; candidates = []; curCandIdx = -1; autoWaitMeta = false; cloudDone = false; cloudStarted = false;
+  playSeq++; var seq = playSeq; candidates = []; curCandIdx = -1; autoWaitMeta = false; cloudDone = false; cloudStarted = false; allCloudSeq = 0;
   audio.pause(); audio.removeAttribute("src"); audio.load(); setPlayIcon(false);
 
   dbgPlayLogs = [];
@@ -1498,7 +1529,7 @@ audio.addEventListener("loadedmetadata", function() {
   }
 });
 audio.addEventListener("waiting", function() { if (curSong) document.getElementById("dArtist").textContent = curSong.artist + " · 缓冲中..."; });
-audio.addEventListener("playing", function() { var c = candidates[curCandIdx]; if (curSong && c) document.getElementById("dArtist").textContent = curSong.artist + " · " + c.label; });
+audio.addEventListener("playing", function() { var c = candidates[curCandIdx]; if (curSong && c) document.getElementById("dArtist").textContent = curSong.artist + " · " + c.label; if (curSong) fetchAllCloudSources(curSong, playSeq); });
 
 function setPlayIcon(p) {
   var i = p ? "&#10074;&#10074;" : "&#9654;";
