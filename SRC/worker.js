@@ -202,28 +202,37 @@ function isBasicAudioUrl(u) {
   return Boolean(u && typeof u === "string" && u.startsWith("http") && !u.includes("panspace.kuwo.cn") && !u.includes("/404"));
 }
 
-async function verifyNot30sTrial(url, durationSec, extraHdrs = {}) {
+function decodeHtml(s) {
+  return String(s || "").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"');
+}
+
+function parseCnInterval(str) {
+  const s = String(str || "");
+  if (!s) return 0;
+  const m = s.match(/(?:(\d+)\s*分)?\s*(\d+)\s*秒/);
+  if (m) return Number(m[1] || 0) * 60 + Number(m[2] || 0);
+  const p = s.split(":").map(Number);
+  return p.length === 2 ? p[0] * 60 + p[1] : 0;
+}
+
+async function verifyNot30sTrial(url, durationSec, extraHeaders = {}, minBitrateKbps = 44) {
   if (!isBasicAudioUrl(url)) return null;
   try {
-    const res = await fetchTimeout(url, {
-      method: "GET",
-      headers: { "User-Agent": UA, Range: "bytes=0-0", ...extraHdrs },
-      redirect: "follow",
-    }, 3000);
-    try { await res.body?.cancel(); } catch {}
-    if (res.url && res.url.includes("/404")) return null;
-    if (res.status !== 200 && res.status !== 206) return null;
+    const res = await fetchTimeout(url, { method: "GET", headers: { Range: "bytes=0-0", "User-Agent": UA, ...extraHeaders }, redirect: "follow" }, 2200);
+    if (res.body) res.body.cancel().catch(() => {});
+    if (res.url && (res.url.includes("/404") || res.url.includes("panspace.kuwo.cn"))) return null;
+    if (res.status === 404 || res.status === 410 || res.status >= 500) return null;
     const ct = (res.headers.get("content-type") || "").toLowerCase();
-    if (ct.includes("text/html") || ct.includes("application/json") || ct.includes("xml")) return null;
-
-    let totalLen = 0;
+    if (ct.includes("text/html") || ct.includes("application/json")) return null;
     const cr = res.headers.get("content-range") || "";
-    const m = cr.match(/\/(\d+)/);
-    if (m) totalLen = Number(m[1]);
-    else if (res.status === 200) totalLen = Number(res.headers.get("content-length") || 0);
-
-    if (totalLen > 0 && durationSec >= 90) {
-      if (totalLen < Math.max(1300 * 1024, durationSec * 11 * 1024)) return null;
+    const m = cr.match(/\/(\d+)$/);
+    const totalLen = m ? Number(m[1]) : (res.status === 200 ? Number(res.headers.get("content-length") || 0) : 0);
+    // 已知时长>=90s，或未知时长(0)但文件不足 900KB，一律判为 30 秒试听截断
+    if (totalLen > 0) {
+      const minBytes = durationSec >= 90
+        ? Math.max(1150 * 1024, Math.round(durationSec * (minBitrateKbps / 8) * 1024))
+        : (durationSec === 0 ? 900 * 1024 : 0);
+      if (minBytes > 0 && totalLen < minBytes) return null;
     }
     return res.url || url;
   } catch {
@@ -231,14 +240,25 @@ async function verifyNot30sTrial(url, durationSec, extraHdrs = {}) {
   }
 }
 
-function mapNeteaseSong(s) {
-  const artists = (s.ar || s.artists || []).map((a) => a.name).filter(Boolean).join(" / ") || "未知歌手";
-  const alb = s.al || s.album || {};
-  return {
-    id: 0, norm_key: makeNormKey(s.name, artists), title: s.name, artist: artists,
-    album: alb.name || "", cover: httpsCover(alb.picUrl || ""), duration: Math.round((s.dt || s.duration || 0) / 1000),
-    category: "网易精选", ext_source: "netease", ext_id: String(s.id),
-  };
+function scoreCandidate(cTitle, cArtist, oTitle, oArtist, cDur, oDur, junkWords = DEFAULT_JUNK_WORDS) {
+  const raw = decodeHtml(cTitle).toLowerCase(), ro = decodeHtml(oTitle).toLowerCase();
+  if (!raw) return -999;
+  if (junkWords.some((w) => raw.includes(w) && !ro.includes(w))) return -999;
+  const d = Number(cDur || 0), od = Number(oDur || 0);
+  if (od >= 90 && d > 0 && (d <= 65 || d < od * 0.72)) return -999;
+  let sc = 0;
+  const t = normalizeName(raw), ot = normalizeName(ro);
+  sc += (t === ot) ? 55 : ((t.includes(ot) || ot.includes(t)) ? 20 : -45);
+  const oaList = decodeHtml(oArtist).split(/[/,、&]/).map(normalizeName).filter((x) => x && x !== "未知歌手");
+  const ca = normalizeName(decodeHtml(Array.isArray(cArtist) ? cArtist.join(" ") : cArtist));
+  if (oaList.length && ca) sc += oaList.some((a) => ca.includes(a) || a.includes(ca)) ? 65 : -120;
+  const softPenalty = ["live", "现场", "演唱会", "翻唱", "cover", "吉他版", "钢琴版", "纯享", "加速", "降调"];
+  for (const w of softPenalty) if (raw.includes(w) && !ro.includes(w)) sc -= 45;
+  if (od > 30 && d > 0) {
+    const diff = Math.abs(d - od);
+    sc += (diff <= 5) ? 45 : (diff <= 15 ? 20 : (diff > 35 ? -40 : 0));
+  }
+  return sc;
 }
 
 async function liveSearchSongs(query, limit = 40, page = 1, junkList = DEFAULT_JUNK_WORDS) {
@@ -543,122 +563,137 @@ async function liveSearchAlbums(query, limit = 24, page = 1) {
 }
 
 // 修复酷我正则：兼容 'NAME':'...' 与 NAME:'...' 以及 "NAME":"..."
-async function searchKuwoRid(song, junkList) {
-  const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
-  const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
-  const sr = await fetchTimeout(`https://search.kuwo.cn/r.s?all=${encodeURIComponent(kw)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=8&rformat=json&encoding=utf8`, { headers: { "User-Agent": UA } }, 2600);
-  const txt = await sr.text(), blocks = txt.split(/\}\s*,\s*\{/);
-  let bestRid = "", bestScore = -100, fallbackRid = "";
-  for (const b of blocks) {
-    const rid = (b.match(/MUSIC_(\d+)/) || [])[1];
+async function searchKuwoRids(kw, song, junkWords) {
+  const sr = await fetchTimeout(
+    `https://search.kuwo.cn/r.s?all=${encodeURIComponent(kw)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=8&rformat=json&encoding=utf8`,
+    { headers: { "User-Agent": UA } }, 2400
+  );
+  const txt = await sr.text();
+  const blocks = txt.split(/\}\s*,\s*\{/);
+  const list = [];
+  for (const blk of blocks) {
+    const rid = (blk.match(/MUSIC_(\d+)/) || [])[1];
     if (!rid) continue;
-    if (!fallbackRid) fallbackRid = rid;
-    const name = (b.match(/['"]?NAME['"]?\s*:\s*['"]([^'"]*)['"]/) || [])[1] || "";
-    const artist = (b.match(/['"]?ARTIST['"]?\s*:\s*['"]([^'"]*)['"]/) || [])[1] || "";
-    const dur = Number((b.match(/['"]?DURATION['"]?\s*:\s*['"]?(\d+)['"]?/) || [])[1] || 0);
-    if (!name) continue;
-    const sc = scoreCandidate(name, artist, song.title, song.artist, dur, song.duration, junkList);
-    if (sc > bestScore) { bestScore = sc; bestRid = rid; }
+    const nm = decodeHtml((blk.match(/['"]?NAME['"]?\s*:\s*['"]([^'"]*)['"]/) || [])[1] || "");
+    const ar = decodeHtml((blk.match(/['"]?ARTIST['"]?\s*:\s*['"]([^'"]*)['"]/) || [])[1] || "");
+    const dur = Number((blk.match(/['"]?DURATION['"]?\s*:\s*['"]?(\d+)['"]?/) || [])[1] || 0);
+    const sc = scoreCandidate(nm, ar, song.title, song.artist, dur, song.duration, junkWords);
+    if (sc > -40) list.push({ rid, sc });
   }
-  return (bestScore > -60 && bestRid) ? bestRid : "";
+  list.sort((a, b) => b.sc - a.sc);
+  return list.slice(0, 2).map((x) => x.rid);
 }
 
-async function raceKuwoAll(song, ids, trace, junkList = DEFAULT_JUNK_WORDS) {
-  const rid = ids.kuwo || (await searchKuwoRid(song, junkList).catch(() => ""));
-  if (!rid) { trace.push("kw:no_rid"); throw new Error("no_rid"); }
-  const kuwoUrls = [
+async function fetchKuwoByRid(rid, song) {
+  const mobiEps = [
     `https://mobi.kuwo.cn/mobi.s?f=web&user=0&source=kwplayer_ar_8.5.5.0_apk_keluze.apk&type=convert_url_with_sign&rid=${rid}&br=320kmp3`,
-    `https://mobi.kuwo.cn/mobi.s?f=web&user=0&source=kwplayer_ar_8.5.5.0_apk_keluze.apk&type=convert_url_with_sign&rid=${rid}&br=128kmp3`,
-    `https://wapi.kuwo.cn/api/v1/www/music/playUrl?mid=${rid}&type=music`,
+    `https://mobi.kuwo.cn/mobi.s?f=web&type=convert_url_with_sign&source=kwplayer_ar_4.4.2.7_B_nuoweida_vh.apk&rid=${rid}&format=mp3&br=192kmp3`,
   ];
-  try {
-    const raw = await Promise.any(kuwoUrls.map(async (ep) => {
-      const r = await fetchTimeout(ep, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, 2600);
+  for (const ep of mobiEps) {
+    try {
+      const r = await fetchTimeout(ep, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, 2200);
       const txt = await r.text();
       let u = "", ekey = "", dur = 0;
       try { const j = JSON.parse(txt); u = j?.data?.url || j?.url || ""; ekey = j?.data?.ekey || ""; dur = Number(j?.data?.duration || 0); }
       catch { const m = txt.match(/url=(http[^\s\r\n]+)/); if (m) u = m[1]; }
-      if (ekey || !isBasicAudioUrl(u)) throw new Error("kw_invalid");
-      if (dur > 0 && song.duration >= 90 && (dur <= 65 || dur < song.duration * 0.72)) throw new Error("kw_trial");
-      return u;
-    }));
-    const real = await verifyNot30sTrial(raw, song.duration, { Referer: "https://www.kuwo.cn/" });
-    if (!real) throw new Error("kw_trial_size");
-    return { url: real, source: "kuwo", kuwoId: rid, headers: { Referer: "https://www.kuwo.cn/", "User-Agent": UA } };
-  } catch { trace.push("kw:fail"); throw new Error("kw_fail"); }
+      if (ekey || !isBasicAudioUrl(u)) continue;
+      if (dur > 0 && song.duration >= 90 && dur <= 65) continue;
+      const real = await verifyNot30sTrial(u, song.duration, { Referer: "https://www.kuwo.cn/" }, 80);
+      if (real) return { url: real, source: "kuwo", kuwoId: rid };
+    } catch {}
+  }
+  return null;
 }
 
-// 新增歌曲宝全曲直出源（仅 3 次轻量请求，无 30s VIP 截断）
-async function raceGequbao(song, trace, junkList = DEFAULT_JUNK_WORDS) {
+async function raceKuwoAll(song, ids, trace, junkWords) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
-  const hdrs = { "User-Agent": UA, Referer: "https://www.gequbao.com/" };
+  const rids = ids.kuwo ? [ids.kuwo] : (await searchKuwoRids(kw, song, junkWords).catch(() => []));
+  if (!rids.length) { trace.push("kw:no_rid"); throw new Error("no_rid"); }
+
+  for (const rid of rids) {
+    const hit = await fetchKuwoByRid(rid, song);
+    if (hit) return hit;
+  }
+  trace.push("kw:fail");
+  throw new Error("kw_fail");
+}
+
+// 歌曲宝：延迟 900ms 仅做保底，且强制要求原唱歌手匹配（bestSc >= 65，彻底杜绝翻唱！）
+async function raceGequbao(song, trace, junkWords) {
+  await new Promise((r) => setTimeout(r, 900));
+  const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
+  const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
   try {
-    const sr = await fetchTimeout(`https://www.gequbao.com/s/${encodeURIComponent(kw)}`, { headers: hdrs }, 2800);
-    if (!sr.ok) throw new Error(`gqb_s_${sr.status}`);
-    const htmlTxt = await sr.text();
-    const matches = [...htmlTxt.matchAll(/<a[^>]+href="\/music\/(\d+)"[^>]*>([\s\S]*?)<\/a>/g)];
-    if (!matches.length) throw new Error("gqb_no_hit");
-
-    let pickedId = "", bestSc = -100;
-    const ot = normalizeName(song.title), oa = normalizeName(cleanArtist);
+    const sr = await fetchTimeout(`https://www.gequbao.com/s/${encodeURIComponent(kw)}`, { headers: { "User-Agent": UA } }, 2600);
+    if (!sr.ok) { trace.push(`gqb:http${sr.status}`); throw new Error("gqb"); }
+    const h = await sr.text();
+    const matches = [...h.matchAll(/href="\/music\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi)];
+    let bestId = "", bestSc = -100;
     for (const m of matches.slice(0, 8)) {
-      const id = m[1], inner = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-      if (!inner || isJunkTitle(inner, song.title, junkList)) continue;
-      let sc = 0; const low = inner.toLowerCase();
-      if (low.includes(ot)) sc += 50;
-      if (oa && low.includes(oa)) sc += 60;
-      for (const w of SOFT_PENALTY_WORDS) if (low.includes(w) && !String(song.title || "").toLowerCase().includes(w)) sc -= 40;
-      if (sc > bestSc) { bestSc = sc; pickedId = id; }
+      const txt = decodeHtml(m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+      const low = txt.toLowerCase();
+      if (junkWords.some((w) => low.includes(w) && !song.title.toLowerCase().includes(w))) continue;
+      const sc = scoreCandidate(txt, txt, song.title, song.artist, 0, song.duration, junkWords);
+      if (sc > bestSc) { bestSc = sc; bestId = m[1]; }
     }
-    if (!pickedId || bestSc < 20) throw new Error("gqb_mismatch");
+    if (!bestId || bestSc < 65) { trace.push("gqb:no_orig"); throw new Error("gqb_no_orig"); }
 
-    const pr = await fetchTimeout(`https://www.gequbao.com/music/${pickedId}`, { headers: hdrs }, 2600);
-    const pTxt = await pr.text();
-    const pm = pTxt.match(/play_id\s*[:=]\s*['"]([^'"]+)['"]/);
-    if (!pm) throw new Error("gqb_no_pid");
+    const dr = await fetchTimeout(`https://www.gequbao.com/music/${bestId}`, { headers: { "User-Agent": UA, Referer: "https://www.gequbao.com/" } }, 2600);
+    const dh = await dr.text();
+    const pid = (dh.match(/play_id\s*[:=]\s*['"]([^'"]+)['"]/) || [])[1];
+    if (!pid) { trace.push("gqb:no_pid"); throw new Error("gqb_no_pid"); }
 
-    const ur = await fetchTimeout("https://www.gequbao.com/api/play-url", {
+    const pr = await fetchTimeout("https://www.gequbao.com/api/play-url", {
       method: "POST",
-      headers: { ...hdrs, "Content-Type": "application/x-www-form-urlencoded", "X-Requested-With": "XMLHttpRequest" },
-      body: "id=" + encodeURIComponent(pm[1]),
+      headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With": "XMLHttpRequest", Referer: `https://www.gequbao.com/music/${bestId}` },
+      body: `id=${encodeURIComponent(pid)}`,
     }, 2600);
-    const ud = await ur.json();
-    const u = ud?.data?.url;
-    if (!isBasicAudioUrl(u)) throw new Error("gqb_no_url");
-    return { url: u, source: "gequbao" };
-  } catch (e) { trace.push("gqb:fail"); throw new Error("gqb_fail"); }
+    const pd = await pr.json();
+    const u = pd?.data?.url || pd?.url || "";
+    const real = await verifyNot30sTrial(u, song.duration, { Referer: "https://www.gequbao.com/" }, 64);
+    if (!real) { trace.push("gqb:trial"); throw new Error("gqb_trial"); }
+    return { url: real, source: "gequbao" };
+  } catch (e) {
+    if (!trace.some((t) => t.startsWith("gqb:"))) trace.push("gqb:err");
+    throw e;
+  }
 }
 
-async function raceGDStudio(song, ids, trace, endpoint = "https://music-api.gdstudio.xyz/api.php", junkList = DEFAULT_JUNK_WORDS) {
+async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstudio.xyz/api.php", junkWords = DEFAULT_JUNK_WORDS) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
-  const base = `${endpoint.replace(/\?.*$/, "")}?use_xbridge3=true`;
+  const sep = gdBase.includes("?") ? "&" : "?";
+  const base = gdBase.includes("use_xbridge3") ? gdBase : `${gdBase}${sep}use_xbridge3=true`;
   const hdrs = { "User-Agent": UA, Accept: "application/json", Referer: "https://music.gdstudio.xyz/", Origin: "https://music.gdstudio.xyz" };
 
   const tasks = ["kuwo", "joox"].map(async (plat) => {
-    const sr = await fetchTimeout(`${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`, { headers: hdrs }, 2600);
+    const sr = await fetchTimeout(`${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`, { headers: hdrs }, 2400);
     if (!sr.ok) throw new Error(`gd_s_${sr.status}`);
-    const arr = await sr.json(); if (!Array.isArray(arr) || !arr.length) throw new Error("gd_no_id");
-    let best = null, bestSc = -100;
-    for (const x of arr) { const sc = scoreCandidate(x.name, x.artist, song.title, song.artist, 0, song.duration, junkList); if (sc > bestSc) { bestSc = sc; best = x; } }
-    if (!best?.id || bestSc <= -60) throw new Error("gd_no_match");
-    const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(best.id)}&br=320`, { headers: hdrs }, 2600);
+    const arr = await sr.json();
+    if (!Array.isArray(arr) || !arr.length) throw new Error("gd_no_id");
+    let best = null, bsc = -100;
+    for (const item of arr) {
+      const sc = scoreCandidate(item.name, item.artist, song.title, song.artist, 0, song.duration, junkWords);
+      if (sc > bsc) { bsc = sc; best = item; }
+    }
+    if (!best || bsc < 20) throw new Error("gd_mismatch");
+    const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(best.id)}&br=320`, { headers: hdrs }, 2400);
     if (!ur.ok) throw new Error(`gd_u_${ur.status}`);
     const d = await ur.json();
-    if (!isBasicAudioUrl(d?.url)) throw new Error("gd_no_url");
-    if (d.size && song.duration >= 90 && Number(d.size) < Math.max(1300, song.duration * 11)) throw new Error("gd_trial_size");
-    if (!d.size && song.duration >= 90) { const real = await verifyNot30sTrial(d.url, song.duration); if (!real) throw new Error("gd_trial"); return { url: real, source: `gd:${plat}` }; }
-    return { url: d.url, source: `gd:${plat}` };
+    if (d?.size && song.duration >= 90 && Number(d.size) < 1300) throw new Error("gd_30s");
+    const real = await verifyNot30sTrial(d?.url, song.duration, {}, 64);
+    if (!real) throw new Error("gd_no_url");
+    return { url: real, source: `gd:${plat}` };
   });
 
   if (ids.netease) {
     tasks.push((async () => {
-      const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${ids.netease}&br=320`, { headers: hdrs }, 2600);
+      const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${ids.netease}&br=320`, { headers: hdrs }, 2400);
       if (!ur.ok) throw new Error(`gd_ne_${ur.status}`);
       const d = await ur.json();
-      if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(1300, song.duration * 11)) throw new Error("gd_ne_size");
-      const real = await verifyNot30sTrial(d?.url, song.duration);
+      if (d?.size && song.duration >= 90 && Number(d.size) < 1300) throw new Error("gd_ne_30s");
+      const real = await verifyNot30sTrial(d?.url, song.duration, {}, 80);
       if (!real) throw new Error("gd_ne_30s");
       return { url: real, source: "gd:netease" };
     })());
@@ -666,24 +701,49 @@ async function raceGDStudio(song, ids, trace, endpoint = "https://music-api.gdst
   try { return await Promise.any(tasks); } catch { trace.push("gd:fail"); throw new Error("gd_fail"); }
 }
 
-async function raceVKeys(song, ids, trace, endpoint = "https://api.vkeys.cn/v2/music", junkList = DEFAULT_JUNK_WORDS) {
+async function raceVKeys(song, ids, trace, vkeysBase = "https://api.vkeys.cn/v2/music", junkWords = DEFAULT_JUNK_WORDS) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
-  const base = endpoint.replace(/\/$/, "");
-  const tasks = [
-    (async () => {
-      const r = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}&n=1&quality=3`, { headers: { "User-Agent": UA } }, 2800);
-      const d = (await r.json())?.data; if (!d?.url) throw new Error("vk_qq_empty");
-      if (scoreCandidate(d.song || song.title, d.singer || song.artist, song.title, song.artist, 0, song.duration, junkList) <= -60) throw new Error("vk_mismatch");
-      const real = await verifyNot30sTrial(d.url, song.duration); if (!real) throw new Error("vk_qq_trial");
-      return { url: real, source: "vkeys:qq" };
-    })(),
-  ];
+  const base = vkeysBase.replace(/\/$/, "");
+
+  const qqTask = (async () => {
+    let pickN = 1;
+    try {
+      const listR = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}`, { headers: { "User-Agent": UA } }, 2200);
+      const listJ = await listR.json();
+      if (Array.isArray(listJ?.data) && listJ.data.length) {
+        let bestIdx = -1, bsc = -100;
+        for (let i = 0; i < Math.min(8, listJ.data.length); i++) {
+          const it = listJ.data[i];
+          const sc = scoreCandidate(it.song || it.name, it.singer || it.artist, song.title, song.artist, parseCnInterval(it.interval), song.duration, junkWords);
+          if (sc > bsc) { bsc = sc; bestIdx = i + 1; }
+        }
+        if (bestIdx > 0 && bsc >= 20) pickN = bestIdx;
+      }
+    } catch {}
+
+    for (const q of [3, 2]) {
+      const r = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}&n=${pickN}&quality=${q}`, { headers: { "User-Agent": UA } }, 2600);
+      const d = (await r.json())?.data;
+      if (!d || !d.url || d.ekey) continue;
+      const vkDur = parseCnInterval(d.interval);
+      if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) continue;
+      if (scoreCandidate(d.song || song.title, d.singer || song.artist, song.title, song.artist, vkDur, song.duration, junkWords) < 20) continue;
+      const real = await verifyNot30sTrial(d.url, 1, {}, 24); // 已由 interval 验证完整时长，只拦截 404/HTML
+      if (real) return { url: real, source: "vkeys:qq" };
+    }
+    throw new Error("vk_qq_empty");
+  })();
+
+  const tasks = [qqTask];
   if (ids.netease) {
     tasks.push((async () => {
-      const r = await fetchTimeout(`${base}/netease?id=${ids.netease}&quality=3`, { headers: { "User-Agent": UA } }, 2800);
-      const d = await r.json();
-      const real = await verifyNot30sTrial(d?.data?.url, song.duration); if (!real) throw new Error("vk_ne_30s");
+      const r = await fetchTimeout(`${base}/netease?id=${ids.netease}&quality=3`, { headers: { "User-Agent": UA } }, 2600);
+      const d = (await r.json())?.data;
+      const vkDur = parseCnInterval(d?.interval);
+      if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) throw new Error("vk_ne_30s");
+      const real = await verifyNot30sTrial(d?.url, song.duration, {}, 80);
+      if (!real) throw new Error("vk_ne_30s");
       return { url: real, source: "vkeys:ne" };
     })());
   }
@@ -1379,64 +1439,87 @@ module.exports = {
     var hit = (data.songs || [])[0]; return hit ? mapSong(hit) : null;
   },
 
-  async getMediaSource(item, quality) {
+ async getMediaSource(item, quality) {
     var br = quality === "super" ? "999" : quality === "low" ? "128" : quality === "standard" ? "192" : "320";
     var dur = Number(item.duration || 0), cleanArtist = String(item.artist || "").split(new RegExp("[,、&/]"))[0].trim();
     var kw = (normStr(item.title) + " " + cleanArtist).trim(), hdrs = { "User-Agent": UA };
 
-    function verifyBytesIfUnknown(url, sizeKb, extraH) {
+    function decHtml(s) {
+      return String(s || "").replace(new RegExp("&amp;", "g"), "&").replace(new RegExp("&nbsp;", "g"), " ").replace(new RegExp("&#39;|&apos;", "g"), "'");
+    }
+    function parseIv(str) {
+      var m = String(str || "").match(new RegExp("(?:(\\\\d+)\\\\s*分)?\\\\s*(\\\\d+)\\\\s*秒"));
+      return m ? (Number(m[1] || 0) * 60 + Number(m[2] || 0)) : 0;
+    }
+    function verifyBytesIfUnknown(url, sizeKb, extraH, minKbps) {
+      var kbps = minKbps || 48;
       if (sizeKb) {
-        if (dur >= 90 && Number(sizeKb) < Math.max(1300, dur * 11)) return Promise.reject("trial_size");
+        if (dur >= 90 && Number(sizeKb) < Math.max(1150, dur * (kbps / 8))) return Promise.reject("trial_size");
         return Promise.resolve(url);
       }
-      if (dur < 90) return Promise.resolve(url);
-      return axios.get(url, { headers: Object.assign({ Range: "bytes=0-0" }, hdrs, extraH || {}), timeout: 2400 }).then(function(hr) {
+      return axios.get(url, { headers: Object.assign({ Range: "bytes=0-0" }, hdrs, extraH || {}), timeout: 2200 }).then(function(hr) {
         var cr = (hr.headers && hr.headers["content-range"]) || "", m = cr.match(new RegExp("/(\\\\d+)"));
         var cl = m ? Number(m[1]) : Number((hr.headers && hr.headers["content-length"]) || 0);
-        if (cl > 0 && cl < Math.max(1300 * 1024, dur * 11 * 1024)) return Promise.reject("trial_range");
+        if (cl > 0 && ((dur >= 90 && cl < Math.max(1150 * 1024, dur * (kbps / 8) * 1024)) || (dur === 0 && cl < 900 * 1024))) return Promise.reject("trial_range");
         return url;
       }).catch(function(e) { return (e === "trial_range") ? Promise.reject(e) : url; });
     }
 
     function tryKuwoLocal() {
       return axios.get("https://search.kuwo.cn/r.s", {
-        params: { all: kw, ft: "music", itemset: "web_2013", client: "kt", pn: 0, rn: 6, rformat: "json", encoding: "utf8" },
+        params: { all: kw, ft: "music", itemset: "web_2013", client: "kt", pn: 0, rn: 8, rformat: "json", encoding: "utf8" },
         headers: hdrs, timeout: 2400
       }).then(function(r) {
-        var blocks = String(r.data || "").split(new RegExp("\\\\}\\\\s*,\\\\s*\\\\{")), bestRid = "", bestSc = -100;
+        var blocks = String(r.data || "").split(new RegExp("\\\\}\\\\s*,\\\\s*\\\\{")), rids = [];
         for (var i = 0; i < blocks.length; i++) {
           var rid = (blocks[i].match(new RegExp("MUSIC_(\\\\d+)")) || [])[1]; if (!rid) continue;
-          var nm = (blocks[i].match(new RegExp("['\\"]?NAME['\\"]?\\\\s*:\\\\s*['\\"]([^'\\"]*)['\\"]")) || [])[1] || "";
-          var ar = (blocks[i].match(new RegExp("['\\"]?ARTIST['\\"]?\\\\s*:\\\\s*['\\"]([^'\\"]*)['\\"]")) || [])[1] || "";
+          var nm = decHtml((blocks[i].match(new RegExp("['\\"]?NAME['\\"]?\\\\s*:\\\\s*['\\"]([^'\\"]*)['\\"]")) || [])[1] || "");
+          var ar = decHtml((blocks[i].match(new RegExp("['\\"]?ARTIST['\\"]?\\\\s*:\\\\s*['\\"]([^'\\"]*)['\\"]")) || [])[1] || "");
           var d = Number((blocks[i].match(new RegExp("['\\"]?DURATION['\\"]?\\\\s*:\\\\s*['\\"]?(\\\\d+)['\\"]?")) || [])[1] || 0);
           var sc = scoreMatch(nm, ar, item.title, item.artist, d, dur);
-          if (sc > bestSc) { bestSc = sc; bestRid = rid; }
+          if (sc > -40) rids.push({ rid: rid, sc: sc });
         }
-        if (!bestRid || bestSc <= -60) return Promise.reject("kw_no_match");
-        return raceFirst([
-          axios.get("https://mobi.kuwo.cn/mobi.s", { params: { f: "web", user: 0, source: "kwplayer_ar_8.5.5.0_apk_keluze.apk", type: "convert_url_with_sign", rid: bestRid, br: br + "kmp3" }, headers: Object.assign({ Referer: "https://www.kuwo.cn/" }, hdrs), timeout: 2400 }),
-          axios.get("https://wapi.kuwo.cn/api/v1/www/music/playUrl", { params: { mid: bestRid, type: "music" }, headers: Object.assign({ Referer: "https://www.kuwo.cn/" }, hdrs), timeout: 2400 })
-        ]).then(function(r2) {
-          var txt = String(r2.data || ""), m = txt.match(new RegExp("url=(http[^\\\\s\\\\r\\\\n]+)"));
-          var u = m ? m[1] : (r2.data && r2.data.data && r2.data.data.url) || (r2.data && r2.data.url) || "";
-          if (!u || txt.indexOf("ekey=") >= 0 || u.indexOf("panspace") >= 0) return Promise.reject("kw_ekey");
-          return verifyBytesIfUnknown(u, 0, { Referer: "https://www.kuwo.cn/" });
-        }).then(function(u) { return { url: u, headers: { Referer: "https://www.kuwo.cn/", "User-Agent": UA } }; });
+        rids.sort(function(a, b) { return b.sc - a.sc; });
+        if (!rids.length) return Promise.reject("kw_no_match");
+        function tryRid(idx) {
+          if (idx >= Math.min(2, rids.length)) return Promise.reject("kw_all_ekey");
+          var curRid = rids[idx].rid;
+          return axios.get("https://mobi.kuwo.cn/mobi.s", { params: { f: "web", user: 0, source: "kwplayer_ar_8.5.5.0_apk_keluze.apk", type: "convert_url_with_sign", rid: curRid, br: br + "kmp3" }, headers: Object.assign({ Referer: "https://www.kuwo.cn/" }, hdrs), timeout: 2400 })
+            .then(function(r2) {
+              var txt = String(r2.data || ""), m = txt.match(new RegExp("url=(http[^\\\\s\\\\r\\\\n]+)"));
+              var u = m ? m[1] : (r2.data && r2.data.data && r2.data.data.url) || "";
+              if (!u || txt.indexOf("ekey=") >= 0 || u.indexOf("panspace") >= 0) return tryRid(idx + 1);
+              return verifyBytesIfUnknown(u, 0, { Referer: "https://www.kuwo.cn/" }, 80).catch(function() { return tryRid(idx + 1); });
+            }).catch(function() { return tryRid(idx + 1); });
+        }
+        return tryRid(0).then(function(u) { return { url: u, headers: { Referer: "https://www.kuwo.cn/", "User-Agent": UA } }; });
       });
     }
 
     function tryVKeysLocal() {
-      var ts = [
-        axios.get("https://api.vkeys.cn/v2/music/tencent", { params: { word: kw, n: 1, quality: 3 }, headers: hdrs, timeout: 2600 }).then(function(r) {
-          var d = r.data && r.data.data; if (!d || !d.url) return Promise.reject("vk_qq_empty");
-          if (scoreMatch(d.song || item.title, d.singer || item.artist, item.title, item.artist, 0, dur) <= -60) return Promise.reject("vk_mismatch");
-          return verifyBytesIfUnknown(d.url, 0).then(function(u) { return { url: u }; });
-        })
-      ];
+      var qqP = axios.get("https://api.vkeys.cn/v2/music/tencent", { params: { word: kw }, headers: hdrs, timeout: 2200 }).then(function(r) {
+        var arr = r.data && r.data.data, pickN = 1;
+        if (Array.isArray(arr) && arr.length) {
+          var bsc = -100;
+          for (var i = 0; i < Math.min(8, arr.length); i++) {
+            var sc = scoreMatch(arr[i].song || arr[i].name, arr[i].singer || arr[i].artist, item.title, item.artist, parseIv(arr[i].interval), dur);
+            if (sc > bsc) { bsc = sc; pickN = i + 1; }
+          }
+          if (bsc < 20) return Promise.reject("vk_qq_mismatch");
+        }
+        return axios.get("https://api.vkeys.cn/v2/music/tencent", { params: { word: kw, n: pickN, quality: 3 }, headers: hdrs, timeout: 2400 });
+      }).then(function(r) {
+        var d = r.data && r.data.data; if (!d || !d.url || d.ekey) return Promise.reject("vk_qq_empty");
+        var iv = parseIv(d.interval);
+        if (dur >= 90 && iv > 0 && (iv <= 65 || iv < dur * 0.72)) return Promise.reject("vk_qq_30s");
+        if (scoreMatch(d.song || item.title, d.singer || item.artist, item.title, item.artist, iv, dur) < 20) return Promise.reject("vk_qq_cover");
+        return { url: d.url };
+      });
+      var ts = [qqP];
       if (item.ext_source === "netease" && item.ext_id) {
-        ts.push(axios.get("https://api.vkeys.cn/v2/music/netease", { params: { id: item.ext_id, quality: 3 }, headers: hdrs, timeout: 2600 }).then(function(r) {
-          var u = r.data && r.data.data && r.data.data.url; if (!u) return Promise.reject("vk_ne_empty");
-          return verifyBytesIfUnknown(u, 0).then(function(vu) { return { url: vu }; });
+        ts.push(axios.get("https://api.vkeys.cn/v2/music/netease", { params: { id: item.ext_id, quality: 3 }, headers: hdrs, timeout: 2400 }).then(function(r) {
+          var d = r.data && r.data.data; if (!d || !d.url) return Promise.reject("vk_ne_empty");
+          return verifyBytesIfUnknown(d.url, 0, {}, 80).then(function(vu) { return { url: vu }; });
         }));
       }
       return raceFirst(ts);
@@ -1445,18 +1528,18 @@ module.exports = {
     function tryGDLocal(plat) {
       var pidP = (plat === "netease" && item.ext_source === "netease" && item.ext_id)
         ? Promise.resolve(item.ext_id)
-        : axios.get("https://music-api.gdstudio.xyz/api.php", { params: { use_xbridge3: "true", types: "search", source: plat, name: kw, count: 5, pages: 1 }, headers: hdrs, timeout: 2600 }).then(function(r) {
+        : axios.get("https://music-api.gdstudio.xyz/api.php", { params: { use_xbridge3: "true", types: "search", source: plat, name: kw, count: 6, pages: 1 }, headers: hdrs, timeout: 2600 }).then(function(r) {
             if (!Array.isArray(r.data) || !r.data.length) return "";
             var best = null, bsc = -100;
             for (var i = 0; i < r.data.length; i++) { var sc = scoreMatch(r.data[i].name, r.data[i].artist, item.title, item.artist, 0, dur); if (sc > bsc) { bsc = sc; best = r.data[i]; } }
-            return (best && bsc > -60 && best.id) ? String(best.id) : "";
+            return (best && bsc >= 20 && best.id) ? String(best.id) : "";
           });
       return pidP.then(function(pid) {
         if (!pid) return Promise.reject("no_id");
         return axios.get("https://music-api.gdstudio.xyz/api.php", { params: { use_xbridge3: "true", types: "url", source: plat, id: pid, br: br }, headers: hdrs, timeout: 2600 });
       }).then(function(r) {
         var d = r.data; if (!d || !d.url || d.url.indexOf("panspace") >= 0) return Promise.reject("gd_empty");
-        return verifyBytesIfUnknown(d.url, d.size).then(function(u) { return { url: u }; });
+        return verifyBytesIfUnknown(d.url, d.size, {}, 64).then(function(u) { return { url: u }; });
       });
     }
 
@@ -1475,7 +1558,7 @@ module.exports = {
     }
 
     if (String(item.artist || "").indexOf("塞壬") >= 0) return await tryCloudFallback(0);
-    return await raceFirst([tryKuwoLocal(), tryVKeysLocal(), tryGDLocal("kuwo"), tryGDLocal("netease"), tryCloudFallback(750)]);
+    return await raceFirst([tryKuwoLocal(), tryGDLocal("kuwo"), tryGDLocal("joox"), tryVKeysLocal(), tryGDLocal("netease"), tryCloudFallback(1300)]);
   },
 
   async getLyric(item) {
