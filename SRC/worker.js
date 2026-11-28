@@ -2670,7 +2670,6 @@ export default {
           if (song) id = song.id;
         }
         if (song) {
-          if (song) {
           const nowSec = Math.floor(Date.now() / 1000);
           ctx.waitUntil(maybeCleanupExpiredLyrics(env));
           if (song.lyric_lrc && song.lyric_lrc.trim().length > 10) {
