@@ -548,8 +548,16 @@ function thumb(u, sz) {
   if (u.indexOf("music.126.net") >= 0 && u.indexOf("?") < 0) return u + "?param=" + (sz || 220) + "y" + (sz || 220);
   return u;
 }
+var TRAD_SIMP_S = "啞哑謙谦傑杰倫伦陳陈張张劉刘楊杨趙赵黃黄吳吴鄭郑孫孙馬马羅罗葉叶蘇苏蔣蒋韓韩馮冯鄧邓蕭萧謝谢許许盧卢韋韦莊庄嚴严鍾钟麥麦歐欧陽阳溫温藍蓝齊齐學学榮荣麗丽龍龙遙遥輝辉闊阔問问戀恋蘭兰煉炼單单愛爱說说聽听後后來来這这為为們们無无樂乐夢梦風风飛飞開开關关門门長长時时見见還还過过對对錯错點点線线書书寫写語语話话詞词調调聲声響响誰谁麼么裡里邊边頭头臉脸淚泪傷伤獨独演員员國国華华東东萬万億亿雙双與与給给讓让願愿會会該该經经總总結结終终離离別别記记憶忆懷怀變变動动靜静歡欢難难實实虛虚輕轻遠远舊旧歲岁晝昼顏颜紅红綠绿銀银鐵铁銅铜鋼钢網网雲云電电";
+function toSimpLocal(s) {
+  var m = {}, i;
+  for (i = 0; i + 1 < TRAD_SIMP_S.length; i += 2) m[TRAD_SIMP_S.charAt(i)] = TRAD_SIMP_S.charAt(i + 1);
+  var out = "", str = String(s || "");
+  for (i = 0; i < str.length; i++) { var c = str.charAt(i); out += m[c] || c; }
+  return out;
+}
 function normStrLocal(s) {
-  return String(s || "").toLowerCase().split("(")[0].split("（")[0].split("[")[0].split("【")[0].replace(/\\s+/g, " ").trim();
+  return toSimpLocal(s).toLowerCase().split("(")[0].split("（")[0].split("[")[0].split("【")[0].replace(/\\s+/g, " ").trim();
 }
 function scoreMatchLocal(cName, cArtist, oTitle, oArtist, cDur, oDur, cAlbum, strict) {
   var raw = String(cName || "").toLowerCase(), ro = String(oTitle || "").toLowerCase();
@@ -1221,7 +1229,7 @@ function buildSongsRowsHtml(songs, hasMore, ctxMode) {
   for (var i = 0; i < songs.length; i++) {
     var s = songs[i], isCur = curSong && curSong.norm_key === s.norm_key, loved = isFav(s);
     var extraBtn = (ctxMode && ctxMode.indexOf("sheet:") === 0) ? '<button class="ico-btn" title="从歌单移除" onclick="removeFromSheet(' + Number(ctxMode.split(":")[1]) + ',' + i + ')">✕</button>' : (ctxMode === "queue" ? '<button class="ico-btn" title="移出队列" onclick="removeFromQueue(' + i + ')">✕</button>' : '<button class="ico-btn" title="加到歌单" onclick="addViewToSheet(' + i + ')">📁</button>');
-    h += '<div class="s-row' + (isCur ? " active" : "") + '" data-nk="' + esc(s.norm_key) + '" onclick="playViewIdx(' + i + ')"><div class="s-num">' + (isCur ? "&#9654;" : (i + 1)) + '</div><img class="s-cov" loading="lazy" referrerpolicy="no-referrer" src="' + esc(thumb(s.cover, 100)) + '" /><div class="s-main"><div class="s-t">' + esc(s.title) + '</div><div class="s-a">' + esc(s.artist) + (s.album ? " · " + esc(s.album) : "") + '</div></div><div class="s-d">' + (s.duration ? fmt(s.duration) : "--:--") + '</div><div class="s-acts" onclick="event.stopPropagation()"><button class="ico-btn' + (loved ? " loved" : "") + '" title="红心收藏" onclick="toggleViewFav(' + i + ',this)">' + (loved ? "&#9829;" : "&#9825;") + '</button>' + extraBtn + '<button class="ico-btn" title="下载到本地" onclick="downloadViewIdx(' + i + ')">⬇</button><button class="ico-btn" title="下一首播放" onclick="addNext(' + i + ')">+</button></div></div>';
+    h += '<div class="s-row' + (isCur ? " active" : "") + '" data-nk="' + esc(s.norm_key) + '" onclick="playViewIdx(' + i + ')"><div class="s-num">' + (isCur ? "&#9654;" : (i + 1)) + '</div><img class="s-cov" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src=DEFAULT_COV;" src="' + esc(thumb(s.cover, 100)) + '" /><div class="s-main"><div class="s-t">' + esc(s.title) + '</div><div class="s-a">' + esc(s.artist) + (s.album ? " · " + esc(s.album) : "") + '</div></div><div class="s-d">' + (s.duration ? fmt(s.duration) : "--:--") + '</div><div class="s-acts" onclick="event.stopPropagation()"><button class="ico-btn' + (loved ? " loved" : "") + '" title="红心收藏" onclick="toggleViewFav(' + i + ',this)">' + (loved ? "&#9829;" : "&#9825;") + '</button>' + extraBtn + '<button class="ico-btn" title="下载到本地" onclick="downloadViewIdx(' + i + ')">⬇</button><button class="ico-btn" title="下一首播放" onclick="addNext(' + i + ')">+</button></div></div>';
   }
   if (hasMore) {
     var isArtistLoading = pageState && pageState.type === "artist" && pageState.loadingMore;
@@ -1283,7 +1291,7 @@ function fetchDirectGD(s, plat, label, seq) {
   var cleanArtist = (s.artist || "").split(/[/,、]|\\s+&\\s+/)[0].trim();
   var kw = (normStrLocal(s.title) + " " + cleanArtist).trim();
   var base = "https://music-api.gdstudio.xyz/api.php?use_xbridge3=true&types=";
-  var reqTimeout = isStrictSongLocal(s) ? 6800 : 4200;
+  var reqTimeout = 4500;
   var t0 = Date.now(), searchUrl = base + "search&source=" + plat + "&name=" + encodeURIComponent(kw) + "&count=6&pages=1";
   function directFetch(url) {
     var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -1463,7 +1471,6 @@ function playQueueIdx(idx) {
   updateFavBtn(); renderSrcBar(); syncActiveRowHighlight();
 
   fetchDirectVKeys(s, seq);
-  fetchDirectGD(s, "kuwo", "酷我(直连)", seq);
   fetchDirectGD(s, "joox", "JOOX(直连)", seq);
   fetchDirectGD(s, "netease", "网易(直连)", seq);
 
