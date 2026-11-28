@@ -165,17 +165,6 @@ function isJunkTitle(title, query = "", junkList = DEFAULT_JUNK_WORDS) {
 
 // 全歌手 Token 原版打分器：合唱曲命中任一主唱即加分 + 72% 时长底线
 
-
-  for (const w of SOFT_PENALTY_WORDS) {
-    if (rawName.includes(w) && !rawOrig.includes(w)) score -= 45;
-  }
-  if (oDur > 30 && dur > 0) {
-    const diff = Math.abs(dur - oDur);
-    if (diff <= 5) score += 45; else if (diff <= 15) score += 22; else if (diff > 35) score -= 40;
-  }
-  return score;
-}
-
 function cleanLrcText(raw) {
   if (!raw) return "";
   return raw.split(/\r?\n/).filter((l) => !["作词 :", "作曲 :", "编曲 :", "制作人 :", "QQ音乐", "网易云"].some((k) => l.includes(k))).join("\n").trim();
