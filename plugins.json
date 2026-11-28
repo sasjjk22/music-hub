@@ -4,12 +4,12 @@
     {
       "name": "MusicHub·全网聚合",
       "url": "https://cdn.jsdelivr.net/gh/sasjjk22/music-hub@main/plugins/music-hub-agg.js",
-      "version": "1.0.6"
+      "version": "1.0.7"
     },
     {
       "name": "MusicHub·B站音频(WBI修复)",
       "url": "https://cdn.jsdelivr.net/gh/sasjjk22/music-hub@main/plugins/music-hub-bili.js",
-      "version": "1.0.1"
+      "version": "1.0.2"
     },
     {
       "name": "MusicHub·塞壬唱片(官方无损)",
