@@ -129,7 +129,7 @@ function html(body, status = 200, extraHeaders = {}) {
   return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8", ...extraHeaders } });
 }
 async function withEdgeCache(ctx, keyPath, ttlSec, fn) {
-  const cache = caches.default, cacheKey = new Request("https://cache.internal/v10" + keyPath);
+  const cache = caches.default, cacheKey = new Request("https://cache.internal/v11" + keyPath);
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
   const resp = await fn(ttlSec);
@@ -536,10 +536,32 @@ async function liveSearchAlbums(query, limit = 24, page = 1) {
 }
 
 // 修复酷我正则：兼容 'NAME':'...' 与 NAME:'...' 以及 "NAME":"..."
-async function searchKuwoRids(kw, song, junkWords = DEFAULT_JUNK_WORDS) {
+const HARD_ARTISTS = ["周杰伦", "jay chou", "林俊杰", "陈奕迅", "taylor swift", "五月天", "邓紫棋", "薛之谦", "陶喆", "王力宏"];
+const NORMAL_ARTISTS = ["张学友", "王菲", "beyond", "孙燕姿", "梁静茹", "张国荣", "李宗盛", "刘德华", "莫文蔚", "蔡依林", "田馥甄", "许嵩"];
+
+function getSongDifficulty(song, ids, forceTier = 0) {
+  if (forceTier >= 1 && forceTier <= 5) return forceTier;
+  if (ids.r2 || ids.msr || ids.kuwo || ids.bili) return 1;
+  const artist = decodeHtml(song.artist || "").toLowerCase();
+  const title = decodeHtml(song.title || "").toLowerCase();
+  if (HARD_ARTISTS.some((a) => artist.includes(a))) return 4;
+  if (title.includes("live") || title.includes("现场") || title.includes("ost") || title.includes("原声")) return 4;
+  if (NORMAL_ARTISTS.some((a) => artist.includes(a))) return 3;
+  return 2;
+}
+
+const TIER_CFG = {
+  1: { reqMs: 2400, totalMs: 3200, maxRids: 1, vkN: [1] },
+  2: { reqMs: 3200, totalMs: 4500, maxRids: 2, vkN: [1] },
+  3: { reqMs: 4200, totalMs: 6200, maxRids: 2, vkN: [1, 2] },
+  4: { reqMs: 5800, totalMs: 8800, maxRids: 3, vkN: [1, 2] },
+  5: { reqMs: 7500, totalMs: 11500, maxRids: 3, vkN: [1, 2, 3] },
+};
+
+async function searchKuwoRids(kw, song, junkWords = DEFAULT_JUNK_WORDS, reqMs = 3500, maxRids = 2) {
   const sr = await fetchTimeout(
-    `https://search.kuwo.cn/r.s?all=${encodeURIComponent(kw)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=8&rformat=json&encoding=utf8`,
-    { headers: { "User-Agent": UA } }, 2200
+    `http://search.kuwo.cn/r.s?all=${encodeURIComponent(kw)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=8&rformat=json&encoding=utf8`,
+    { headers: { "User-Agent": UA } }, reqMs
   );
   const txt = await sr.text();
   const list = [];
@@ -550,19 +572,25 @@ async function searchKuwoRids(kw, song, junkWords = DEFAULT_JUNK_WORDS) {
     const ar = decodeHtml((blk.match(/['"]?ARTIST['"]?\s*:\s*['"]([^'"]*)['"]/) || [])[1] || "");
     const dur = Number((blk.match(/['"]?DURATION['"]?\s*:\s*['"]?(\d+)['"]?/) || [])[1] || 0);
     const sc = scoreCandidate(nm, ar, song.title, song.artist, dur, song.duration, junkWords);
-    if (sc >= 15) list.push({ rid, sc });
+    if (sc >= 10) list.push({ rid, sc });
   }
   list.sort((a, b) => b.sc - a.sc);
-  return list.slice(0, 2).map((x) => x.rid);
+  return list.slice(0, maxRids).map((x) => x.rid);
 }
 
-async function fetchKuwoByRid(rid, song) {
+async function fetchKuwoByRid(rid, song, reqMs = 3500, tryWapi = false) {
   const eps = [
     `https://mobi.kuwo.cn/mobi.s?f=web&user=0&source=kwplayer_ar_8.5.5.0_apk_keluze.apk&type=convert_url_with_sign&rid=${rid}&br=320kmp3`,
     `https://mobi.kuwo.cn/mobi.s?f=web&type=convert_url_with_sign&source=kwplayer_ar_4.4.2.7_B_nuoweida_vh.apk&rid=${rid}&format=mp3&br=192kmp3`,
   ];
+  if (tryWapi) {
+    eps.push(
+      `https://wapi.kuwo.cn/api/v1/www/music/playUrl?mid=${rid}&type=music`,
+      `http://antiserver.kuwo.cn/anti.s?type=convert_url3&rid=${rid}&format=mp3`
+    );
+  }
   return Promise.any(eps.map(async (ep) => {
-    const r = await fetchTimeout(ep, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, 2200);
+    const r = await fetchTimeout(ep, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } }, reqMs);
     const txt = await r.text();
     let u = "", ekey = "", dur = 0;
     try { const j = JSON.parse(txt); u = j?.data?.url || j?.url || ""; ekey = j?.data?.ekey || ""; dur = Number(j?.data?.duration || 0); }
@@ -575,19 +603,20 @@ async function fetchKuwoByRid(rid, song) {
   }));
 }
 
-async function raceKuwoAll(song, ids, trace, junkWords = DEFAULT_JUNK_WORDS) {
+async function raceKuwoAll(song, ids, trace, junkWords = DEFAULT_JUNK_WORDS, tier = 3) {
+  const cfg = TIER_CFG[tier] || TIER_CFG[3];
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
-  const rids = ids.kuwo ? [ids.kuwo] : (await searchKuwoRids(kw, song, junkWords).catch(() => []));
+  const rids = ids.kuwo ? [ids.kuwo] : (await searchKuwoRids(kw, song, junkWords, cfg.reqMs, cfg.maxRids).catch(() => []));
   if (!rids.length) { trace.push("kw:no_rid"); throw new Error("no_rid"); }
   for (const rid of rids) {
-    try { return await fetchKuwoByRid(rid, song); } catch {}
+    try { return await fetchKuwoByRid(rid, song, cfg.reqMs, tier >= 3); } catch {}
   }
   trace.push("kw:fail");
   throw new Error("kw_fail");
 }
 
-async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstudio.xyz/api.php", junkWords = DEFAULT_JUNK_WORDS) {
+async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstudio.xyz/api.php", junkWords = DEFAULT_JUNK_WORDS, reqMs = 4200) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
   const sep = gdBase.includes("?") ? "&" : "?";
@@ -595,7 +624,7 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
   const hdrs = { "User-Agent": UA, Accept: "application/json", Referer: "https://music.gdstudio.xyz/", Origin: "https://music.gdstudio.xyz" };
 
   const tasks = ["kuwo", "joox", "kugou"].map(async (plat) => {
-    const sr = await fetchTimeout(`${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`, { headers: hdrs }, 2400);
+    const sr = await fetchTimeout(`${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`, { headers: hdrs }, reqMs);
     if (!sr.ok) throw new Error(`gd_s_${sr.status}`);
     const arr = await sr.json();
     if (!Array.isArray(arr) || !arr.length) throw new Error("gd_no_id");
@@ -605,7 +634,7 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
       if (sc > bsc) { bsc = sc; best = item; }
     }
     if (!best || bsc < 20) throw new Error("gd_mismatch");
-    const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(best.id)}&br=320`, { headers: hdrs }, 2400);
+    const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(best.id)}&br=320`, { headers: hdrs }, reqMs);
     if (!ur.ok) throw new Error(`gd_u_${ur.status}`);
     const d = await ur.json();
     if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(1150, song.duration * 6)) throw new Error("gd_30s");
@@ -616,7 +645,7 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
 
   if (ids.netease) {
     tasks.push((async () => {
-      const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${ids.netease}&br=320`, { headers: hdrs }, 2400);
+      const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${ids.netease}&br=320`, { headers: hdrs }, reqMs);
       if (!ur.ok) throw new Error(`gd_ne_${ur.status}`);
       const d = await ur.json();
       if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(1200, song.duration * 6)) throw new Error("gd_ne_30s");
@@ -628,12 +657,13 @@ async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstud
   try { return await Promise.any(tasks); } catch { trace.push("gd:fail"); throw new Error("gd_fail"); }
 }
 
-// 酷狗移动搜索 + Baka 聚合直链（2026 musicdl / LenoMusic 实测有效通道）
-async function raceBakaKugou(song, trace, junkWords = DEFAULT_JUNK_WORDS) {
+// 用 http:// 避开酷狗搜索在 CF 上的 526 SSL 错误
+async function raceBakaKugou(song, trace, junkWords = DEFAULT_JUNK_WORDS, reqMs = 3800) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
   try {
-    const sr = await fetchTimeout(`https://msearchcdn.kugou.com/api/v3/search/song?keyword=${encodeURIComponent(kw)}&page=1&pagesize=6`, { headers: { "User-Agent": UA } }, 2400);
+    const sr = await fetchTimeout(`http://msearchcdn.kugou.com/api/v3/search/song?keyword=${encodeURIComponent(kw)}&page=1&pagesize=6`, { headers: { "User-Agent": UA } }, reqMs);
+    if (!sr.ok) { trace.push(`kg:http${sr.status}`); throw new Error("kg_http"); }
     const list = (await sr.json())?.data?.info || [];
     let best = null, bsc = -100;
     for (const it of list) {
@@ -652,50 +682,56 @@ async function raceBakaKugou(song, trace, junkWords = DEFAULT_JUNK_WORDS) {
   }
 }
 
-async function raceVKeys(song, ids, trace, vkeysBase = "https://api.vkeys.cn/v2/music", junkWords = DEFAULT_JUNK_WORDS) {
+// VKeys + 落月CF（全档位并发，耗时从 3.6s 降到 1s！）
+async function raceVKeys(song, ids, trace, vkeysBase = "https://api.vkeys.cn/v2/music", junkWords = DEFAULT_JUNK_WORDS, tier = 3) {
+  const cfg = TIER_CFG[tier] || TIER_CFG[3];
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
   const endpoints = [vkeysBase.replace(/\/$/, ""), "https://luoyue-api-cf.vincentzyu233.cn/v2/music"];
+  const qs = tier >= 4 ? [3, 2, 1, 4] : [3, 2];
 
-  const qqTasks = endpoints.map(async (base, idx) => {
-    for (const q of [4, 3, 2, 1]) {
-      try {
-        const r = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}&n=1&quality=${q}`, { headers: { "User-Agent": UA } }, 2400);
-        const d = (await r.json())?.data;
-        if (!d || !isBasicAudioUrl(d.url) || d.ekey) continue;
-        const vkDur = parseCnInterval(d.interval);
-        if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) continue;
-        if (scoreCandidate(d.song || song.title, d.singer || song.artist, song.title, song.artist, vkDur, song.duration, junkWords) < 15) continue;
-        return { url: d.url, source: idx === 0 ? "vkeys:qq" : "luoyue:qq" };
-      } catch {}
+  const qqTasks = [];
+  for (let idx = 0; idx < endpoints.length; idx++) {
+    const base = endpoints[idx], tag = idx === 0 ? "vkeys:qq" : "luoyue:qq";
+    for (const n of cfg.vkN) {
+      for (const q of qs) {
+        qqTasks.push((async () => {
+          const r = await fetchTimeout(`${base}/tencent?word=${encodeURIComponent(kw)}&n=${n}&quality=${q}`, { headers: { "User-Agent": UA } }, cfg.reqMs);
+          if (!r.ok) throw new Error("vk_http");
+          const d = (await r.json())?.data;
+          if (!d || !isBasicAudioUrl(d.url) || d.ekey) throw new Error("vk_empty");
+          const vkDur = parseCnInterval(d.interval);
+          if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) throw new Error("vk_30s");
+          if (scoreCandidate(d.song || song.title, d.singer || song.artist, song.title, song.artist, vkDur, song.duration, junkWords) < 15) throw new Error("vk_mismatch");
+          return { url: d.url, source: tag };
+        })());
+      }
     }
-    throw new Error("vk_qq_empty");
-  });
+  }
 
   const tasks = [...qqTasks];
   if (ids.netease) {
-    tasks.push((async () => {
-      for (const base of endpoints) {
-        for (const q of [4, 3, 2]) {
-          try {
-            const r = await fetchTimeout(`${base}/netease?id=${ids.netease}&quality=${q}`, { headers: { "User-Agent": UA } }, 2400);
-            const d = (await r.json())?.data;
-            const vkDur = parseCnInterval(d?.interval);
-            if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) continue;
-            const real = await verifyNot30sTrial(d?.url, song.duration, {}, 64, true);
-            if (real) return { url: real, source: "vkeys:ne" };
-          } catch {}
-        }
+    for (const base of endpoints) {
+      for (const q of [4, 3, 2]) {
+        tasks.push((async () => {
+          const r = await fetchTimeout(`${base}/netease?id=${ids.netease}&quality=${q}`, { headers: { "User-Agent": UA } }, cfg.reqMs);
+          if (!r.ok) throw new Error("vk_ne_http");
+          const d = (await r.json())?.data;
+          const vkDur = parseCnInterval(d?.interval);
+          if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) throw new Error("vk_ne_30s");
+          const real = await verifyNot30sTrial(d?.url, song.duration, {}, 64, true);
+          if (!real) throw new Error("vk_ne_invalid");
+          return { url: real, source: "vkeys:ne" };
+        })());
       }
-      throw new Error("vk_ne_30s");
-    })());
+    }
   }
   try { return await Promise.any(tasks); } catch { trace.push("vkeys:fail"); throw new Error("vkeys"); }
 }
 
-async function raceMeting(baseUrl, tag, neteaseId, durationSec, trace) {
+async function raceMeting(baseUrl, tag, neteaseId, durationSec, trace, reqMs = 2600) {
   if (!neteaseId) throw new Error("no_id");
-  const r = await fetchTimeout(`${baseUrl}?server=netease&type=song&id=${neteaseId}`, { headers: { "User-Agent": UA } }, 2400);
+  const r = await fetchTimeout(`${baseUrl}?server=netease&type=song&id=${neteaseId}`, { headers: { "User-Agent": UA } }, reqMs);
   if (!r.ok) { trace.push(`${tag}:${r.status}`); throw new Error(r.status); }
   const arr = await r.json();
   const u = Array.isArray(arr) ? arr[0]?.url : arr?.url;
@@ -704,11 +740,11 @@ async function raceMeting(baseUrl, tag, neteaseId, durationSec, trace) {
   return { url: real, source: tag };
 }
 
-async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.bilibili.com", junkWords = DEFAULT_JUNK_WORDS) {
+async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.bilibili.com", junkWords = DEFAULT_JUNK_WORDS, reqMs = 4500) {
   try {
     const base = biliBase.replace(/\/$/, "");
-    const spiR = await fetchTimeout(`${base}/x/frontend/finger/spi`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, 2600);
-    const spi = (await spiR.json().catch(() => ({})))?.data || {};
+    const spiR = await fetchTimeout(`${base}/x/frontend/finger/spi`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, 2800);
+    const spi = spiR.ok ? ((await spiR.json().catch(() => ({})))?.data || {}) : {};
     const cookie = `buvid3=${spi.b_3 || crypto.randomUUID()}; buvid4=${spi.b_4 || ""}`;
 
     let bvid = ids.bili || "";
@@ -717,7 +753,10 @@ async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.b
       const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
       const sRes = await fetchTimeout(`${base}/x/web-interface/search/all/v2?keyword=${encodeURIComponent(kw)}`, {
         headers: { "User-Agent": UA, Referer: "https://search.bilibili.com/", Cookie: cookie },
-      }, 3600);
+      }, reqMs);
+      if (!sRes.ok || !(sRes.headers.get("content-type") || "").includes("json")) {
+        trace.push(`bili:http${sRes.status}`); return null;
+      }
       const sJson = await sRes.json();
       if (sJson.code !== 0) { trace.push(`bili_s:${sJson.code}`); return null; }
       const vGroup = (sJson?.data?.result || []).find((g) => g.result_type === "video");
@@ -740,13 +779,15 @@ async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.b
       bvid = best.bvid;
     }
 
-    const vRes = await fetchTimeout(`${base}/x/web-interface/view?bvid=${bvid}`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, 2800);
-    const cid = (await vRes.json())?.data?.cid;
+    const vRes = await fetchTimeout(`${base}/x/web-interface/view?bvid=${bvid}`, { headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" } }, reqMs);
+    if (!vRes.ok) { trace.push(`bili_v:${vRes.status}`); return null; }
+    const cid = (await vRes.json().catch(() => ({})))?.data?.cid;
     if (!cid) { trace.push("bili:no_cid"); return null; }
 
     for (const fnval of [4048, 1]) {
-      const uRes = await fetchTimeout(`${base}/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64&fnval=${fnval}&otype=json`, { headers: { "User-Agent": UA, Referer: `https://www.bilibili.com/video/${bvid}`, Cookie: cookie } }, 3500);
-      const uData = (await uRes.json())?.data;
+      const uRes = await fetchTimeout(`${base}/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64&fnval=${fnval}&otype=json`, { headers: { "User-Agent": UA, Referer: `https://www.bilibili.com/video/${bvid}`, Cookie: cookie } }, reqMs);
+      if (!uRes.ok) continue;
+      const uData = (await uRes.json().catch(() => ({})))?.data;
       const audios = uData?.dash?.audio || [];
       if (audios.length) {
         audios.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
@@ -760,44 +801,52 @@ async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.b
   return null;
 }
 
-async function resolvePlayUrl(song, quality, env, prefer = "", skip = "") {
+async function resolvePlayUrl(song, quality, env, prefer = "", skip = "", forceTier = 0) {
   const ids = JSON.parse(song.source_ids_json || "{}"), trace = [];
   const cfg = await getRuntimeCfg(env), srcMap = new Map(cfg.sources.map((s) => [s.id, s]));
   const isEnabled = (id) => { const s = srcMap.get(id); return !s || Number(s.enabled) === 1; };
 
-  if (ids.r2 && env.R2 && env.R2_PUBLIC_URL) return { url: `${env.R2_PUBLIC_URL.replace(/\/$/, "")}/${ids.r2}`, source: "r2", trace };
+  if (ids.r2 && env.R2 && env.R2_PUBLIC_URL) return { url: `${env.R2_PUBLIC_URL.replace(/\/$/, "")}/${ids.r2}`, source: "r2", tier: 1, trace };
   if (ids.msr && isEnabled("msr")) {
     const msrBase = (srcMap.get("msr")?.endpoint || "https://monster-siren.hypergryph.com/api").replace(/\/$/, "");
-    try { const u = (await (await fetchTimeout(`${msrBase}/song/${ids.msr}`, {}, 3000)).json())?.data?.sourceUrl; if (u) return { url: u, source: "msr", trace }; } catch { trace.push("msr:err"); }
+    try { const u = (await (await fetchTimeout(`${msrBase}/song/${ids.msr}`, {}, 3000)).json())?.data?.sourceUrl; if (u) return { url: u, source: "msr", tier: 1, trace }; } catch { trace.push("msr:err"); }
   }
 
   const skipSet = new Set(String(skip || "").split(",").map((x) => x.trim()).filter(Boolean));
   if (skipSet.has("kuwo") && ids.kuwo) { delete ids.kuwo; song = { ...song, source_ids_json: JSON.stringify(ids) }; }
 
-  // 第 0 秒同步启动 B 站兜底，避免主源全部失败后再等 3 秒
-  const biliP = isEnabled("bili")
-    ? fallbackBilibiliAudio(song, ids, trace, srcMap.get("bili")?.endpoint || "https://api.bilibili.com", cfg.junkWords)
+  const tier = getSongDifficulty(song, ids, forceTier);
+  const tCfg = TIER_CFG[tier] || TIER_CFG[3];
+  trace.push(`T${tier}`);
+
+  const biliP = (tier >= 3 && isEnabled("bili"))
+    ? fallbackBilibiliAudio(song, ids, trace, srcMap.get("bili")?.endpoint || "https://api.bilibili.com", cfg.junkWords, tCfg.reqMs)
     : Promise.resolve(null);
 
   const raceList = [];
   if (prefer === "kuwo") {
-    raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords));
+    raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords, tier));
   } else {
-    if (!skipSet.has("kuwo")) raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords));
-    if (!skipSet.has("gd") && !skipSet.has("gdstudio") && isEnabled("gdstudio")) raceList.push(raceGDStudio(song, ids, trace, srcMap.get("gdstudio")?.endpoint || "https://music-api.gdstudio.xyz/api.php", cfg.junkWords));
-    if (!skipSet.has("vkeys") && isEnabled("vkeys")) raceList.push(raceVKeys(song, ids, trace, srcMap.get("vkeys")?.endpoint || "https://api.vkeys.cn/v2/music", cfg.junkWords));
-    if (!skipSet.has("kugou")) raceList.push(raceBakaKugou(song, trace, cfg.junkWords));
-    if (!skipSet.has("meting") && ids.netease) raceList.push(raceMeting("https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, trace));
+    if (!skipSet.has("kuwo")) raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords, tier));
+    if (!skipSet.has("gd") && !skipSet.has("gdstudio") && isEnabled("gdstudio")) raceList.push(raceGDStudio(song, ids, trace, srcMap.get("gdstudio")?.endpoint || "https://music-api.gdstudio.xyz/api.php", cfg.junkWords, tCfg.reqMs));
+    if (!skipSet.has("vkeys") && isEnabled("vkeys")) raceList.push(raceVKeys(song, ids, trace, srcMap.get("vkeys")?.endpoint || "https://api.vkeys.cn/v2/music", cfg.junkWords, tier));
+    if (!skipSet.has("kugou")) raceList.push(raceBakaKugou(song, trace, cfg.junkWords, tCfg.reqMs));
+    // 只有 Lv1~Lv2 普通歌曲才带 Meting；Lv3~Lv5 困难歌直接跳过避免 30s 干扰
+    if (tier <= 2 && !skipSet.has("meting") && ids.netease) raceList.push(raceMeting("https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, trace, 2400));
   }
 
   try {
-    const winner = await raceWithDeadline(Promise.any(raceList), 4200);
-    return { ...winner, trace };
+    const winner = await raceWithDeadline(Promise.any(raceList), tCfg.totalMs);
+    return { ...winner, tier, trace };
   } catch (e) {
-    if (e?.message === "deadline") trace.push("fast:deadline");
+    if (e?.message === "deadline") trace.push(`deadline_${tCfg.totalMs}ms`);
     const biliHit = await biliP;
-    if (biliHit) return { ...biliHit, trace };
-    return { error: "可用完整源均未命中", trace };
+    if (biliHit) return { ...biliHit, tier, trace };
+    if (tier < 3 && isEnabled("bili")) {
+      const b2 = await fallbackBilibiliAudio(song, ids, trace, srcMap.get("bili")?.endpoint || "https://api.bilibili.com", cfg.junkWords, 5000);
+      if (b2) return { ...b2, tier, trace };
+    }
+    return { error: "可用完整源均未命中", tier, trace };
   }
 }
 
@@ -1092,7 +1141,7 @@ export default {
           return json({ artists, hasMore: artists.length >= 20 }, 200, artists.length ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1" });
         });
       }
-      if (path === "/api/artist") {
+    if (path === "/api/artist") {
         const name = (url.searchParams.get("name") || "").trim(), aid = (url.searchParams.get("id") || "").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
         if (!name && !aid) return json({ songs: [], albums: [] });
         return withEdgeCache(ctx, `/artist/${encodeURIComponent(aid || name)}/${page}`, 900, async (ttl) => {
@@ -1102,11 +1151,13 @@ export default {
           if (page === 1) {
             const official = await fetchOfficialArtistData(name, /^\d+$/.test(aid) ? aid : "", cfg.junkWords), mergedSongs = [...localRows];
             for (const s of official.songs) if (!seen.has(s.norm_key)) { seen.add(s.norm_key); mergedSongs.push(s); }
-            if (mergedSongs.length < 10 && name) for (const s of await liveSearchSongs(name, 40, 1, cfg.junkWords)) if (!seen.has(s.norm_key)) { seen.add(s.norm_key); mergedSongs.push(s); }
-            return json({ artist: name, page, hasMore: true, songs: mergedSongs, albums: official.albums }, 200, mergedSongs.length ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1" });
+            if (mergedSongs.length < 15 && name) for (const s of await liveSearchSongs(name, 40, 1, cfg.junkWords)) if (!seen.has(s.norm_key)) { seen.add(s.norm_key); mergedSongs.push(s); }
+            const albums = official.albums.length ? official.albums : (name ? await liveSearchAlbums(name, 20, 1) : []);
+            const okCache = mergedSongs.length >= 15 && albums.length > 0;
+            return json({ artist: name, page, hasMore: true, songs: mergedSongs, albums }, 200, okCache ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1" });
           }
           const live = await liveSearchSongs(name, 40, page, cfg.junkWords), nameLower = name.toLowerCase();
-          return json({ artist: name, page, hasMore: live.length >= 25, songs: live.filter((s) => !seen.has(s.norm_key) && (s.artist.toLowerCase().includes(nameLower) || nameLower.includes(s.artist.toLowerCase()))), albums: [] }, 200, { "Cache-Control": `public, max-age=${ttl}` });
+          return json({ artist: name, page, hasMore: live.length >= 25, songs: live.filter((s) => !seen.has(s.norm_key) && (s.artist.toLowerCase().includes(nameLower) || nameLower.includes(s.artist.toLowerCase()))), albums: [] }, 200, live.length ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1" });
         });
       }
       if (path === "/api/sheets") {
