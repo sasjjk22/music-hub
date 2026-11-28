@@ -22,6 +22,13 @@ const JUNK_WORDS = [
   "吉他版",
   "钢琴版",
   "弹唱",
+  "纯音乐",
+  "instrumental",
+  "钢琴曲",
+  "演奏版",
+  "背景音乐",
+  "轻音乐",
+  "伴奏版",
 ];
 
 const NETEASE_TOPLISTS = [
@@ -292,7 +299,7 @@ async function resolveFromAgg(source, rawId, brList, durationSec) {
 module.exports = {
   platform: "MusicHub·全网聚合",
   author: "MusicHub",
-  version: "1.0.1",
+  version: "1.0.2",
   cacheControl: "no-cache",
   supportedSearchType: ["music"],
 

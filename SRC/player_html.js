@@ -361,7 +361,7 @@ var DEFAULT_RADIOS = [
   { id: "acg", title: "二次元 · 游戏原声", desc: "ACG 主题曲与塞壬唱片官方无损库", icon: "🎧", grad: "linear-gradient(135deg,#2563eb,#06b6d4)" },
   { id: "drive", title: "公路驾驶 · 燃曲电音", desc: "摇滚、节奏电音，提神醒脑", icon: "🚗", grad: "linear-gradient(135deg,#dc2626,#f97316)" }
 ];
-var JUNK_W = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x"];
+var JUNK_W = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x", "纯音乐", "instrumental", "钢琴曲", "演奏版", "背景音乐", "轻音乐", "伴奏版"];
 var SOFT_W = ["live", "现场", "演唱会", "翻唱", "cover", "吉他版", "钢琴版", "纯享", "加速", "降调"];
 
 function esc(s) { return String(s || "").replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
@@ -384,7 +384,11 @@ function scoreMatchLocal(cName, cArtist, oTitle, oArtist, cDur, oDur) {
   var sc = 0, t = normStrLocal(cName), ot = normStrLocal(oTitle);
   sc += (t === ot) ? 55 : ((t.indexOf(ot) >= 0 || ot.indexOf(t) >= 0) ? 20 : -45);
   var oa = normStrLocal(String(oArtist || "").split(/[/,、&]/)[0]), ca = normStrLocal(Array.isArray(cArtist) ? cArtist.join(" ") : cArtist);
-  if (oa && oa !== "未知歌手") sc += (ca && (ca.indexOf(oa) >= 0 || oa.indexOf(ca) >= 0)) ? 65 : (ca ? -120 : 0);
+  if (oa && oa !== "未知歌手") {
+    if (ca && (ca.indexOf(oa) >= 0 || oa.indexOf(ca) >= 0)) sc += 65;
+    else if (ca) sc -= 160;
+    else sc -= 18;
+  }
   for (var j = 0; j < SOFT_W.length; j++) if (raw.indexOf(SOFT_W[j]) >= 0 && ro.indexOf(SOFT_W[j]) < 0) sc -= 45;
   if (od > 30 && d > 0) {
     var diff = Math.abs(d - od);
