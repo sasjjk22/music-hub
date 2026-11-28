@@ -267,6 +267,33 @@ async function searchMusic(query, page) {
       });
     }
   }
+
+  // Migu official search is an independent discovery fallback. Avoid adding latency
+  // to broad searches that already returned a healthy list from other providers.
+  if (results.length < 8) try {
+    const params = new URLSearchParams({ ua: "Android_migu", version: "5.0.1", text: query, pageNo: String(Math.max(1, page)), pageSize: "15", isCopyright: "1", isCorrect: "1", sort: "0", searchSwitch: JSON.stringify({ song: 1, album: 0, singer: 0, tagSong: 0, mvSong: 0, songlist: 0, bestShow: 1 }) });
+    const endpoints = [
+      `${MIGU_BASE}/MIGUM3.0/v1.0/content/search_all.do?${params}`,
+      `${MIGU_BASE}/MIGUM2.0/v1.0/content/search_all.do?${params}`,
+      `https://c.musicapp.migu.cn/v1.0/content/search_all.do?${params}`,
+    ];
+    let items = [];
+    for (const endpoint of endpoints) {
+      try { items = miguItems(await miguJson(endpoint)); if (items.length) break; } catch (_) {}
+    }
+    for (const item of items) {
+      const meta = `${item.title} ${item.artist} ${item.album}`.toLowerCase();
+      if (!item.contentId || !item.title || JUNK_WORDS.some((w) => meta.includes(w) && !String(query || "").toLowerCase().includes(w))) continue;
+      const key = `${normalizeName(item.title)}|${normalizeName(String(item.artist || "未知歌手").split(/[\/,、&]/)[0])}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({
+        id: `migu_${item.contentId}`, title: item.title, artist: item.artist || "未知歌手", album: item.album || "",
+        duration: item.duration || undefined, artwork: item.cover || undefined,
+        _source: "migu", _rawId: item.contentId, _copyrightId: item.copyrightId, _lyricId: item.contentId,
+      });
+    }
+  } catch (_) {}
   return { isEnd: results.length < 15, data: results };
 }
 
@@ -286,10 +313,133 @@ async function resolveFromAgg(source, rawId, brList, durationSec) {
   return null;
 }
 
+
+const MIGU_BASE = "https://app.c.nf.migu.cn";
+const MIGU_CURATED = {
+  "一路向北|周杰伦": "60054701958",
+  "兰亭序|周杰伦": "60054702006",
+};
+function miguNorm(s) { return normalizeName(String(s || "")).replace(/[\s·•_-]/g, ""); }
+function miguArtist(item) {
+  const x = item?.singers || item?.singerList || item?.artists || item?.singer || item?.artist || "";
+  return Array.isArray(x) ? x.map((v) => typeof v === "string" ? v : v?.name || "").filter(Boolean).join(" / ") : (typeof x === "object" ? x.name || "" : String(x || ""));
+}
+function miguSeconds(value) {
+  if (typeof value === "number" || /^\d+(\.\d+)?$/.test(String(value || ""))) {
+    const n = Number(value || 0); return n > 10000 ? Math.round(n / 1000) : Math.round(n);
+  }
+  const p = String(value || "").split(":").map(Number);
+  if (p.length === 3 && p.every(Number.isFinite)) return p[0] * 3600 + p[1] * 60 + p[2];
+  if (p.length === 2 && p.every(Number.isFinite)) return p[0] * 60 + p[1];
+  return 0;
+}
+function miguCandidate(item) {
+  if (!item) return null;
+  return {
+    title: String(item.name || item.songName || item.title || ""),
+    artist: miguArtist(item),
+    album: typeof item.album === "object" ? (item.album.name || "") : String(item.album || item.albumName || ""),
+    contentId: String(item.contentId || item.songId || item.id || ""),
+    copyrightId: String(item.copyrightId || item.cpId || ""),
+    duration: miguSeconds(item.duration || item.interval || item.songTime || 0),
+    cover: String(item.imgItems?.[0]?.img || item.albumPic || item.picUrl || item.cover || ""),
+  };
+}
+async function miguJson(url) {
+  const { data } = await axios.get(url, { headers: { "User-Agent": UA, Accept: "application/json, text/plain, */*", Referer: "https://music.migu.cn/", ua: "Android_migu", version: "5.0.1" }, timeout: 6500 });
+  if (!data || typeof data !== "object") throw new Error("Migu invalid response");
+  return data;
+}
+function miguItems(raw) {
+  const root = raw?.data || raw;
+  const a = root?.songResultData?.result || raw?.songResultData?.result || root?.songResultData?.resultList || [];
+  return Array.isArray(a) ? a.flat(Infinity).map(miguCandidate).filter((x) => x?.contentId) : [];
+}
+async function tryMiguDirect(musicItem) {
+  try {
+    const title = String(musicItem.title || "").trim();
+    const artist = String(musicItem.artist || "").split(/[\/,、&]/)[0].trim();
+    if (!title || !artist) return null;
+    const curatedKey = `${miguNorm(title)}|${miguNorm(artist)}`;
+    const curatedId = Object.entries(MIGU_CURATED).find(([k]) => {
+      const [t, a] = k.split("|");
+      return miguNorm(t) === miguNorm(title) && miguNorm(a) === miguNorm(artist);
+    })?.[1] || ((musicItem._source === "migu" && /^\d+$/.test(String(musicItem._rawId || ""))) ? String(musicItem._rawId) : "");
+    let candidates = [];
+    if (curatedId) {
+      for (const endpoint of [
+        `${MIGU_BASE}/MIGUM2.0/v1.0/content/queryById.do?resourceType=2&contentId=${encodeURIComponent(curatedId)}`,
+        `${MIGU_BASE}/MIGUM2.0/v2.0/content/querySongBySongId.do?contentId=${encodeURIComponent(curatedId)}`,
+      ]) {
+        try {
+          const raw = await miguJson(endpoint);
+          const root = raw?.data || raw;
+          const item = root?.resource?.[0] || raw?.resource?.[0] || root?.resource || root?.songInfo || root?.song;
+          const candidate = miguCandidate(item);
+          if (candidate) { candidates.push(candidate); break; }
+        } catch (_) {}
+      }
+    }
+    if (!candidates.length || !candidates.some((x) => x.artist && x.title)) {
+      const params = new URLSearchParams({ ua: "Android_migu", version: "5.0.1", text: `${artist} ${title}`, pageNo: "1", pageSize: "12", isCopyright: "1", isCorrect: "1", sort: "0", searchSwitch: JSON.stringify({ song: 1, album: 0, singer: 0, tagSong: 0, mvSong: 0, songlist: 0, bestShow: 1 }) });
+      const searchUrls = [
+        `${MIGU_BASE}/MIGUM3.0/v1.0/content/search_all.do?${params}`,
+        `${MIGU_BASE}/MIGUM2.0/v1.0/content/search_all.do?${params}`,
+        `https://c.musicapp.migu.cn/v1.0/content/search_all.do?${params}`,
+      ];
+      for (const endpoint of searchUrls) {
+        try {
+          const found = miguItems(await miguJson(endpoint));
+          if (found.length) { candidates.push(...found); break; }
+        } catch (_) {}
+      }
+    }
+    const bad = /(纯音乐|纯钢琴|instrumental|钢琴曲|伴奏|翻唱|cover|吉他版|弹唱|演奏版|dj版)/i;
+    const hit = candidates.find((x) => {
+      if (bad.test(`${x.title} ${x.album}`)) return false;
+      if (miguNorm(x.title) !== miguNorm(title)) return false;
+      const a = miguNorm(x.artist), wanted = miguNorm(artist);
+      if (!a || !(a.includes(wanted) || wanted.includes(a) || (wanted.includes("周杰伦") && /(周杰伦|jaychou|周董)/i.test(x.artist)))) return false;
+      const expected = Number(musicItem.duration || 0), actual = Number(x.duration || 0);
+      if (expected >= 90 && actual > 0 && (actual <= 65 || actual < expected * 0.72)) return false;
+      return true;
+    });
+    if (!hit?.contentId) return null;
+    let detail = hit;
+    if (!detail.copyrightId) {
+      for (const endpoint of [
+        `${MIGU_BASE}/MIGUM2.0/v1.0/content/queryById.do?resourceType=2&contentId=${encodeURIComponent(hit.contentId)}`,
+        `${MIGU_BASE}/MIGUM2.0/v2.0/content/querySongBySongId.do?contentId=${encodeURIComponent(hit.contentId)}`,
+      ]) {
+        try {
+          const raw = await miguJson(endpoint), root = raw?.data || raw;
+          const x = miguCandidate(root?.resource?.[0] || raw?.resource?.[0] || root?.resource || root?.songInfo || root?.song);
+          if (x?.copyrightId) { detail = { ...hit, ...x, contentId: x.contentId || hit.contentId }; break; }
+        } catch (_) {}
+      }
+    }
+    if (!detail.copyrightId) return null;
+    for (const tone of ["HQ", "PQ"]) {
+      const endpoints = [
+        `${MIGU_BASE}/MIGUM2.0/v2.0/content/listen-url?netType=01&toneFlag=${tone}&copyrightId=${encodeURIComponent(detail.copyrightId)}&contentId=${encodeURIComponent(detail.contentId)}`,
+        `${MIGU_BASE}/MIGUM3.0/strategy/pc/listen/v1.0?scene=&netType=01&resourceType=2&copyrightId=${encodeURIComponent(detail.copyrightId)}&contentId=${encodeURIComponent(detail.contentId)}&toneFlag=${tone}`,
+      ];
+      for (const endpoint of endpoints) {
+        try {
+          const raw = await miguJson(endpoint), data = raw?.data || raw;
+          const url = data?.url || data?.listenUrl || data?.playUrl || data?.audioUrl || data?.songUrl;
+          if (typeof url === "string" && /^https?:\/\//i.test(url)) return { url, headers: { Referer: "https://music.migu.cn/", "User-Agent": UA } };
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
 module.exports = {
   platform: "MusicHub·全网聚合",
   author: "MusicHub",
-  version: "1.0.3",
+  version: "1.0.4",
   cacheControl: "no-cache",
   supportedSearchType: ["music"],
 
@@ -306,8 +456,23 @@ module.exports = {
       : [musicItem._source || "netease", musicItem._rawId || idStr];
     const dur = Number(musicItem.duration || 0);
 
-    const direct = await resolveFromAgg(parsedSource, parsedId, brList, dur);
-    if (direct) return direct;
+    // For Jay Chou tracks, validate against Migu's official metadata before
+    // trusting an old cached provider ID that might point at an instrumental version.
+    const strictJay = /(周杰伦|jay\s*chou|周董)/i.test(String(musicItem.artist || ""));
+    if (strictJay) {
+      const miguHit = await tryMiguDirect(parsedSource === "migu" ? { ...musicItem, _source: "migu", _rawId: parsedId } : musicItem);
+      if (miguHit) return miguHit;
+    }
+
+    if (parsedSource === "migu") {
+      if (!strictJay) {
+        const miguHit = await tryMiguDirect({ ...musicItem, _source: "migu", _rawId: parsedId });
+        if (miguHit) return miguHit;
+      }
+    } else {
+      const direct = await resolveFromAgg(parsedSource, parsedId, brList, dur);
+      if (direct) return direct;
+    }
 
     const cleanArtist = (musicItem.artist || "").split(/[\/,、&]/)[0].trim();
     const keyword = `${normalizeName(musicItem.title)} ${cleanArtist}`.trim();
@@ -334,6 +499,9 @@ module.exports = {
         if (hit) return hit;
       } catch (_) {}
     }
+
+    const miguHit = await tryMiguDirect(musicItem);
+    if (miguHit) return miguHit;
 
     const biliHit = await fallbackBilibiliAudio(musicItem.title, musicItem.artist, dur);
     if (biliHit) return biliHit;

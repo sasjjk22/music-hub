@@ -770,14 +770,14 @@ function openPresetArtist(i) { var ar = artistsCache[i]; if (ar) openArtistDetai
 function openSearchedArtist(i) { var ar = searchedArtists[i]; if (ar) openArtistDetail(ar.name, ar.id, ar.worksNum ? ar.worksNum + "首作品" : "在线歌手"); }
 function openArtistDetail(name, aid, tag) {
   curTabName = "detail"; backTarget = "artists";
-  pageState = { type: "artist", query: name, artistId: aid || "", artistOffset: 0, page: 1, hasMore: false, loadingMore: false, artistAlbums: [], artistSongs: [], artistTab: "songs", artistName: name, artistTag: tag || "" };
+  pageState = { type: "artist", query: name, artistId: aid || "", artistOffset: 0, page: 1, hasMore: false, loadingMore: false, artistExhausted: false, artistAlbums: [], artistSongs: [], artistTab: "songs", artistName: name, artistTag: tag || "" };
   var requestState = pageState;
   document.getElementById("leftPane").innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">检索 ' + esc(name) + ' 单曲与专辑...</div>';
   api("/api/artist?name=" + encodeURIComponent(name) + "&id=" + encodeURIComponent(aid || "") + "&page=1").then(function(d) {
     if (pageState !== requestState) return;
     pageState.artistId = String(d.artistId || aid || "");
     pageState.artistOffset = Math.max(0, Number(d.nextOffset || 0));
-    pageState.hasMore = Boolean(d.hasMore); pageState.artistAlbums = d.albums || []; pageState.artistSongs = d.songs || []; viewSongs = pageState.artistSongs; renderArtistDetail();
+    pageState.hasMore = Boolean(d.hasMore); pageState.artistExhausted = !pageState.hasMore; pageState.artistAlbums = d.albums || []; pageState.artistSongs = d.songs || []; viewSongs = pageState.artistSongs; renderArtistDetail();
   }).catch(function(){ if (pageState === requestState) toast("歌手数据加载失败，请重试"); });
 }
 function renderArtistDetail() {
@@ -798,7 +798,7 @@ function renderArtistDetail() {
     }
     document.getElementById("leftPane").innerHTML = h + '</div>'; return;
   }
-  document.getElementById("leftPane").innerHTML = h + buildSongsRowsHtml(viewSongs, pageState.hasMore, "");
+  document.getElementById("leftPane").innerHTML = h + buildSongsRowsHtml(viewSongs, Boolean(pageState.hasMore), "");
 }
 function openAlbumObj(i, fromArtist) {
   var al = fromArtist ? pageState.artistAlbums[i] : albumsCache[i]; if (!al) return;
@@ -855,7 +855,12 @@ function loadMore() {
       stateRef.artistId = String(d.artistId || stateRef.artistId || "");
       stateRef.artistOffset = Math.max(offset, Number(d.nextOffset || (offset + batch.length)));
       stateRef.hasMore = Boolean(d.hasMore && batch.length);
-      if (!added && !batch.length) toast("没有更多歌曲了");
+      stateRef.artistExhausted = !stateRef.hasMore;
+      if (!batch.length || !added) {
+        stateRef.artistExhausted = true;
+        stateRef.hasMore = false;
+        toast(batch.length ? "没有发现新的歌曲" : "没有更多歌曲了");
+      }
     }).catch(function() {
       if (pageState === stateRef) toast("加载失败，请稍后重试");
     }).finally(function() {

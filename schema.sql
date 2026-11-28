@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS shares (
 INSERT OR IGNORE INTO sources (id, name, type, endpoint, priority, enabled) VALUES
   ('gdstudio', 'GDStudio 聚合解析', 'agg', 'https://music-api.gdstudio.xyz/api.php', 10, 1),
   ('msr', '塞壬唱片官方直连', 'native', 'https://monster-siren.hypergryph.com/api', 5, 1),
-  ('bili', 'B站 WBI 音频流兜底', 'bili', 'https://api.bilibili.com', 90, 1);
+  ('bili', 'B站 WBI 音频流兜底', 'bili', 'https://api.bilibili.com', 90, 1),
+  ('migu', '咪咕音乐官方解析', 'migu', 'https://app.c.nf.migu.cn', 15, 1);
 
 INSERT OR IGNORE INTO settings (key, value) VALUES
   ('junk_words', 'dj版,dj舞曲,伴奏,喊麦,铃声,广场舞,卡拉ok,消音版');

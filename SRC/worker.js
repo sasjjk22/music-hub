@@ -188,6 +188,42 @@ function mapNeteaseSong(song) {
     ext_id: songId,
   };
 }
+async function validateNeteaseSongId(song, songId) {
+  const id = String(songId || "");
+  if (!/^\d+$/.test(id)) return false;
+  try {
+    const response = await fetchTimeout("https://music.163.com/api/v3/song/detail", {
+      method: "POST",
+      headers: { ...NE_HEADERS, "Content-Type": "application/x-www-form-urlencoded" },
+      body: "c=" + encodeURIComponent(JSON.stringify([{ id: Number(id) }])) ,
+    }, 3800);
+    if (!response.ok) return false;
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (contentType && !contentType.includes("json")) return false;
+    const raw = (await response.json())?.songs?.[0];
+    const meta = mapNeteaseSong(raw);
+    if (!meta) return false;
+    const titleOK = normalizeName(meta.title) === normalizeName(song?.title || "");
+    const artistOK = artistIdentityMatches(meta.artist, song?.artist || "");
+    const versionText = `${meta.title} ${meta.album}`.toLowerCase();
+    const versionOK = !/(\blive\b|现场|演唱会|remix|instrumental|纯音乐|伴奏|翻唱|cover|钢琴版|吉他版)/i.test(versionText);
+    const durationOK = !(Number(song?.duration) > 0 && Number(meta.duration) > 0) || Math.abs(Number(song.duration) - Number(meta.duration)) <= 20;
+    return Boolean(titleOK && artistOK && versionOK && durationOK);
+  } catch {
+    return false;
+  }
+}
+function summarizeAggregateError(error, max = 3) {
+  const items = Array.isArray(error?.errors) ? error.errors : [error];
+  const out = [];
+  for (const item of items) {
+    const raw = String(item?.message || item || "unknown").replace(/[^a-zA-Z0-9_:-]/g, "_").slice(0, 42);
+    if (raw && !out.includes(raw)) out.push(raw);
+    if (out.length >= max) break;
+  }
+  return out.join(",") || "unknown";
+}
+
 function isJunkTitle(title, query = "", junkList = DEFAULT_JUNK_WORDS) {
   const t = (title || "").toLowerCase(), q = (query || "").toLowerCase();
   return junkList.some((w) => t.includes(w) && !q.includes(w));
@@ -689,6 +725,7 @@ async function fetchOfficialArtistData(name, artistId = "", junkList = DEFAULT_J
     const songs = (hotData.hotSongs || []).filter((song) => song?.name && !isJunkTitle(song.name, artistName, junkList)).map(mapNeteaseSong).filter(Boolean);
     const albums = (albumData.hotAlbums || []).map((album) => ({
       id: String(album.id), title: album.name, artist: album.artist?.name || artistName,
+      artistId: String(album.artist?.id || aid || ""),
       cover: httpsCover(album.picUrl || ""), size: album.size || 0,
       publishTime: album.publishTime ? new Date(album.publishTime).toISOString().slice(0, 10) : "",
     }));
@@ -702,7 +739,7 @@ async function liveSearchAlbums(query, limit = 24, page = 1) {
   try {
     const r = await fetchTimeout(`https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(query)}&type=10&limit=${limit + 12}&offset=${offset}`, { headers: NE_HEADERS }, 4500);
     const albs = (await r.json())?.result?.albums || [], clean = albs.filter((a) => (a.size || 0) >= 4), picked = clean.length ? clean : albs;
-    return picked.slice(0, limit).map((a) => ({ id: String(a.id), title: a.name, artist: a.artist?.name || query, cover: httpsCover(a.picUrl || ""), size: a.size || 0, publishTime: a.publishTime ? new Date(a.publishTime).toISOString().slice(0, 10) : "" }));
+    return picked.slice(0, limit).map((a) => ({ id: String(a.id), title: a.name, artist: a.artist?.name || query, artistId: String(a.artist?.id || ""), cover: httpsCover(a.picUrl || ""), size: a.size || 0, publishTime: a.publishTime ? new Date(a.publishTime).toISOString().slice(0, 10) : "" }));
   } catch { return []; }
 }
 
@@ -793,51 +830,66 @@ async function raceKuwoAll(song, ids, trace, junkWords = DEFAULT_JUNK_WORDS, tie
   throw new Error("kw_fail");
 }
 
-async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstudio.xyz/api.php", junkWords = DEFAULT_JUNK_WORDS, reqMs = 4200) {
+async function raceGDStudio(song, ids, trace, gdBase = "https://music-api.gdstudio.xyz/api.php", junkWords = DEFAULT_JUNK_WORDS, reqMs = 4200, strictIdCheck = Promise.resolve(true)) {
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
   const sep = gdBase.includes("?") ? "&" : "?";
   const base = gdBase.includes("use_xbridge3") ? gdBase : `${gdBase}${sep}use_xbridge3=true`;
   const hdrs = { "User-Agent": UA, Accept: "application/json", Referer: "https://music.gdstudio.xyz/", Origin: "https://music.gdstudio.xyz" };
-
   const strict = isStrictSong(song);
   const providers = strict ? ["netease", "joox", "kuwo"] : ["kuwo", "joox", "kugou"];
   const tasks = providers.map(async (plat) => {
-    const sr = await fetchTimeout(`${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`, { headers: hdrs }, reqMs);
-    if (!sr.ok) throw new Error(`gd_s_${sr.status}`);
-    const ct = (sr.headers.get("content-type") || "").toLowerCase();
-    if (ct && !ct.includes("json")) throw new Error("gd_search_non_json");
-    const arr = await sr.json();
-    if (!Array.isArray(arr) || !arr.length) throw new Error("gd_no_id");
-    let best = null, bsc = -100;
-    for (const item of arr) {
-      const sc = scoreCandidate(item.name, item.artist, song.title, song.artist, Number(item.duration || 0), song.duration, junkWords, strict, item.album || "");
-      if (sc > bsc) { bsc = sc; best = item; }
+    try {
+      const sr = await fetchTimeout(`${base}&types=search&source=${plat}&name=${encodeURIComponent(kw)}&count=6&pages=1`, { headers: hdrs }, reqMs);
+      if (!sr.ok) throw new Error(`search_http_${sr.status}`);
+      const ct = (sr.headers.get("content-type") || "").toLowerCase();
+      if (ct && !ct.includes("json")) throw new Error("search_non_json");
+      const arr = await sr.json();
+      if (!Array.isArray(arr) || !arr.length) throw new Error("search_empty");
+      let best = null, bsc = -100;
+      for (const item of arr) {
+        const sc = scoreCandidate(item.name, item.artist, song.title, song.artist, Number(item.duration || 0), song.duration, junkWords, strict, item.album || "");
+        if (sc > bsc) { bsc = sc; best = item; }
+      }
+      if (!best || bsc < (strict ? 80 : 20)) throw new Error("candidate_mismatch");
+      const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(best.id)}&br=320`, { headers: hdrs }, reqMs);
+      if (!ur.ok) throw new Error(`url_http_${ur.status}`);
+      const uct = (ur.headers.get("content-type") || "").toLowerCase();
+      if (uct && !uct.includes("json")) throw new Error("url_non_json");
+      const d = await ur.json();
+      if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(320, song.duration * 2.8)) throw new Error("suspicious_size");
+      const real = await verifyNot30sTrial(d?.url, song.duration, {}, 44, false);
+      if (!real) throw new Error("audio_probe_rejected");
+      return { url: real, source: `gd:${plat}` };
+    } catch (error) {
+      const reason = String(error?.message || "error").replace(/[^a-zA-Z0-9_:-]/g, "_").slice(0, 42);
+      if (!trace.some((item) => item.startsWith(`gd:${plat}:`))) trace.push(`gd:${plat}:${reason}`);
+      throw error;
     }
-    if (!best || bsc < (strict ? 80 : 20)) throw new Error("gd_mismatch");
-    const ur = await fetchTimeout(`${base}&types=url&source=${plat}&id=${encodeURIComponent(best.id)}&br=320`, { headers: hdrs }, reqMs);
-    if (!ur.ok) throw new Error(`gd_u_${ur.status}`);
-    const uct = (ur.headers.get("content-type") || "").toLowerCase();
-    if (uct && !uct.includes("json")) throw new Error("gd_url_non_json");
-    const d = await ur.json();
-    if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(320, song.duration * 2.8)) throw new Error("gd_suspicious_size");
-    const real = await verifyNot30sTrial(d?.url, song.duration, {}, 44, false);
-    if (!real) throw new Error("gd_no_url");
-    return { url: real, source: `gd:${plat}` };
   });
 
-  if (ids.netease && !strict) {
+  // A stored NetEase ID is usable for Lv4/Lv5 only after checking title, artist,
+  // version and duration against the upstream song metadata.
+  if (ids.netease) {
     tasks.push((async () => {
-      const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${ids.netease}&br=320`, { headers: hdrs }, reqMs);
-      if (!ur.ok) throw new Error(`gd_ne_${ur.status}`);
+      if (strict && !(await strictIdCheck)) throw new Error("netease_id_identity_mismatch");
+      const ur = await fetchTimeout(`${base}&types=url&source=netease&id=${encodeURIComponent(ids.netease)}&br=320`, { headers: hdrs }, reqMs);
+      if (!ur.ok) throw new Error(`netease_id_http_${ur.status}`);
+      const ct = (ur.headers.get("content-type") || "").toLowerCase();
+      if (ct && !ct.includes("json")) throw new Error("netease_id_non_json");
       const d = await ur.json();
-      if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(320, song.duration * 2.8)) throw new Error("gd_ne_suspicious_size");
-      const real = await verifyNot30sTrial(d?.url, song.duration, {}, 64, true);
-      if (!real) throw new Error("gd_ne_30s");
-      return { url: real, source: "gd:netease" };
-    })());
+      if (d?.size && song.duration >= 90 && Number(d.size) < Math.max(320, song.duration * 2.8)) throw new Error("netease_id_suspicious_size");
+      const real = await verifyNot30sTrial(d?.url, song.duration, {}, 44, false);
+      if (!real) throw new Error("netease_id_audio_rejected");
+      return { url: real, source: "gd:netease-id" };
+    })().catch((error) => {
+      const reason = String(error?.message || "error").replace(/[^a-zA-Z0-9_:-]/g, "_").slice(0, 42);
+      trace.push(`gd:netease-id:${reason}`);
+      throw error;
+    }));
   }
-  try { return await Promise.any(tasks); } catch { trace.push("gd:fail"); throw new Error("gd_fail"); }
+  try { return await Promise.any(tasks); }
+  catch (error) { trace.push(`gd:fail[${summarizeAggregateError(error)}]`); throw new Error("gd_fail"); }
 }
 
 // 用 http:// 避开酷狗搜索在 CF 上的 526 SSL 错误
@@ -858,7 +910,7 @@ async function raceBakaKugou(song, trace, junkWords = DEFAULT_JUNK_WORDS, reqMs 
     if (!hash || bsc < (strict ? 80 : 20)) { trace.push("kg:mismatch"); throw new Error("kg_mismatch"); }
     const u = `https://api.baka.plus/meting/?server=kugou&type=url&id=${hash}&br=320`;
     const real = await verifyNot30sTrial(u, song.duration, {}, 44, true);
-    if (!real) { trace.push("kg:30s"); throw new Error("kg_30s"); }
+    if (!real) { trace.push("kg:probe_rejected"); throw new Error("kg_audio_probe"); }
     return { url: real, source: "baka:kugou" };
   } catch (e) {
     if (!trace.some((t) => t.startsWith("kg:"))) trace.push("kg:fail");
@@ -867,7 +919,7 @@ async function raceBakaKugou(song, trace, junkWords = DEFAULT_JUNK_WORDS, reqMs 
 }
 
 // VKeys + 落月CF（全档位并发，耗时从 3.6s 降到 1s！）
-async function raceVKeys(song, ids, trace, vkeysBase = "https://api.vkeys.cn/v2/music", junkWords = DEFAULT_JUNK_WORDS, tier = 3) {
+async function raceVKeys(song, ids, trace, vkeysBase = "https://api.vkeys.cn/v2/music", junkWords = DEFAULT_JUNK_WORDS, tier = 3, strictIdCheck = Promise.resolve(true)) {
   const cfg = TIER_CFG[tier] || TIER_CFG[3];
   const cleanArtist = (song.artist || "").split(/[/,、&]/)[0].trim();
   const kw = `${normalizeName(song.title)} ${cleanArtist}`.trim();
@@ -897,23 +949,27 @@ async function raceVKeys(song, ids, trace, vkeysBase = "https://api.vkeys.cn/v2/
   }
 
   const tasks = [...qqTasks];
-  if (ids.netease && !isStrictSong(song)) {
+  if (ids.netease) {
     for (const base of endpoints) {
       for (const q of [4, 3, 2]) {
         tasks.push((async () => {
-          const r = await fetchTimeout(`${base}/netease?id=${ids.netease}&quality=${q}`, { headers: { "User-Agent": UA } }, cfg.reqMs);
-          if (!r.ok) throw new Error("vk_ne_http");
+          if (strict && !(await strictIdCheck)) throw new Error("netease_id_identity_mismatch");
+          const r = await fetchTimeout(`${base}/netease?id=${encodeURIComponent(ids.netease)}&quality=${q}`, { headers: { "User-Agent": UA } }, cfg.reqMs);
+          if (!r.ok) throw new Error(`netease_id_http_${r.status}`);
+          const ct = (r.headers.get("content-type") || "").toLowerCase();
+          if (ct && !ct.includes("json")) throw new Error("netease_id_non_json");
           const d = (await r.json())?.data;
           const vkDur = parseCnInterval(d?.interval);
-          if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) throw new Error("vk_ne_30s");
-          const real = await verifyNot30sTrial(d?.url, song.duration, {}, 64, true);
-          if (!real) throw new Error("vk_ne_invalid");
-          return { url: real, source: "vkeys:ne" };
+          if (song.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < song.duration * 0.72)) throw new Error("netease_id_short");
+          const real = await verifyNot30sTrial(d?.url, song.duration, {}, 44, false);
+          if (!real) throw new Error("netease_id_audio_rejected");
+          return { url: real, source: "vkeys:netease-id" };
         })());
       }
     }
   }
-  try { return await Promise.any(tasks); } catch { trace.push("vkeys:fail"); throw new Error("vkeys"); }
+  try { return await Promise.any(tasks); }
+  catch (error) { trace.push(`vkeys:fail[${summarizeAggregateError(error)}]`); throw new Error("vkeys"); }
 }
 
 async function raceMeting(baseUrl, tag, neteaseId, durationSec, trace, reqMs = 2600) {
@@ -925,6 +981,256 @@ async function raceMeting(baseUrl, tag, neteaseId, durationSec, trace, reqMs = 2
   const real = await verifyNot30sTrial(u, durationSec, {}, 64, true);
   if (!real) { trace.push(`${tag}:30s`); throw new Error("trial"); }
   return { url: real, source: tag };
+}
+
+
+// Migu Music official-source integration. IDs below are user-supplied share IDs;
+// metadata is fetched and verified at runtime before a playable URL is accepted.
+const MIGU_DEFAULT_BASE = "https://app.c.nf.migu.cn";
+const CURATED_TRACK_SOURCE_IDS = Object.freeze({
+  "一路向北|周杰伦": { migu: "60054701958" },
+  "兰亭序|周杰伦": { migu: "60054702006" },
+  "以父之名|周杰伦": { netease: "36205" },
+  "七里香|周杰伦": { netease: "4194" },
+});
+
+function curatedTrackSourceIds(song) {
+  const title = normalizeName(String(song?.title || ""));
+  const artist = normalizeName(String(song?.artist || "").split(/[\/,、&]/)[0]);
+  for (const [key, ids] of Object.entries(CURATED_TRACK_SOURCE_IDS)) {
+    const [wantedTitle, wantedArtist] = key.split("|");
+    if (title === normalizeName(wantedTitle) && artistIdentityMatches(artist, wantedArtist)) return { ...ids };
+  }
+  return {};
+}
+
+function miguDuration(value) {
+  if (typeof value === "number" || /^\d+(\.\d+)?$/.test(String(value || ""))) {
+    const n = Number(value || 0);
+    if (n > 10000) return Math.round(n / 1000);
+    return Math.round(n);
+  }
+  const raw = String(value || "").trim();
+  const p = raw.split(":").map(Number);
+  if (p.length === 3 && p.every(Number.isFinite)) return p[0] * 3600 + p[1] * 60 + p[2];
+  if (p.length === 2 && p.every(Number.isFinite)) return p[0] * 60 + p[1];
+  const m = raw.match(/(?:(\d+)\s*分)?\s*(\d+)秒/);
+  return m ? Number(m[1] || 0) * 60 + Number(m[2] || 0) : 0;
+}
+
+function miguPickList(raw) {
+  const root = raw?.data || raw?.result || raw || {};
+  const lists = [
+    root?.songResultData?.result,
+    root?.songResultData?.resultList,
+    root?.songResultData?.resultlist,
+    root?.data?.songResultData?.result,
+    root?.data?.songResultData?.resultList,
+    raw?.songResultData?.result,
+    raw?.data?.resource,
+    root?.resource,
+  ];
+  for (const list of lists) if (Array.isArray(list)) return list.flat(Infinity).filter((x) => x && typeof x === "object");
+  return [];
+}
+
+function miguSingerText(item) {
+  const raw = item?.singers || item?.singerList || item?.artists || item?.artistList || item?.singer || item?.artist || item?.singerName || item?.artistName || "";
+  if (Array.isArray(raw)) return raw.map((x) => typeof x === "string" ? x : x?.name || x?.singerName || "").filter(Boolean).join(" / ");
+  if (raw && typeof raw === "object") return raw.name || raw.singerName || "";
+  return String(raw || "");
+}
+
+function normalizeMiguItem(item) {
+  if (!item || typeof item !== "object") return null;
+  const title = String(item.name || item.songName || item.title || item.resourceName || "").trim();
+  const artist = miguSingerText(item).trim();
+  const contentId = String(item.contentId || item.songId || item.id || item.resourceId || "");
+  const copyrightId = String(item.copyrightId || item.cpId || item.copyrightID || "");
+  if (!title || !/^\d+$/.test(contentId)) return null;
+  const albumInfo = item.album || item.albumInfo || item.albumName || "";
+  const album = typeof albumInfo === "object" ? (albumInfo.name || albumInfo.albumName || "") : String(albumInfo || "");
+  const img = item.imgItems?.[0]?.img || item.albumPic || item.picUrl || item.cover || item.pic || "";
+  const duration = miguDuration(item.duration || item.interval || item.songTime || item.length || item.time);
+  return { title, artist, album, contentId, copyrightId, duration, cover: String(img || ""), raw: item };
+}
+
+function extractMiguDetail(raw) {
+  const root = raw?.data || raw?.result || raw || {};
+  const candidates = [
+    ...(Array.isArray(raw?.resource) ? raw.resource : []),
+    ...(Array.isArray(root?.resource) ? root.resource : []),
+    root?.resource,
+    root?.songInfo,
+    root?.song,
+    root?.data?.resource?.[0],
+    raw?.data?.resource?.[0],
+  ].filter(Boolean);
+  for (const item of candidates) {
+    const normalized = normalizeMiguItem(item);
+    if (normalized) return normalized;
+    const nested = item?.resource?.[0] || item?.songInfo || item?.song;
+    const n2 = normalizeMiguItem(nested);
+    if (n2) return n2;
+  }
+  return normalizeMiguItem(root);
+}
+
+async function miguFetchJson(url, timeoutMs = 4000) {
+  const r = await fetchTimeout(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/122.0.0.0 Mobile Safari/537.36",
+      "Accept": "application/json, text/plain, */*",
+      "Referer": "https://music.migu.cn/",
+      "Origin": "https://music.migu.cn",
+      "ua": "Android_migu",
+      "version": "5.0.1",
+    },
+  }, timeoutMs);
+  if (!r.ok) throw new Error(`migu_http_${r.status}`);
+  const text = await r.text();
+  try { return JSON.parse(text); } catch { throw new Error("migu_non_json"); }
+}
+
+async function searchMiguCandidates(song, base, page = 1, timeoutMs = 4200) {
+  const keyword = `${String(song?.artist || "").split(/[\/,、&]/)[0].trim()} ${normalizeName(song?.title || "")}`.trim();
+  const params = new URLSearchParams({
+    ua: "Android_migu", version: "5.0.1", text: keyword,
+    pageNo: String(Math.max(1, page)), pageSize: "15", isCopyright: "1", isCorrect: "1", sort: "0",
+    searchSwitch: JSON.stringify({ song: 1, album: 0, singer: 0, tagSong: 0, mvSong: 0, songlist: 0, bestShow: 1 }),
+  });
+  const endpoints = [
+    `${base}/MIGUM3.0/v1.0/content/search_all.do?${params}`,
+    `${base}/MIGUM2.0/v1.0/content/search_all.do?${params}`,
+    `https://c.musicapp.migu.cn/v1.0/content/search_all.do?${params}`,
+  ];
+  for (const endpoint of endpoints) {
+    try {
+      const raw = await miguFetchJson(endpoint, timeoutMs);
+      const list = miguPickList(raw).map(normalizeMiguItem).filter(Boolean);
+      if (list.length) return list;
+    } catch (_) {}
+  }
+  return [];
+}
+
+async function fetchMiguDetail(contentId, base, timeoutMs = 4200) {
+  if (!/^\d+$/.test(String(contentId || ""))) throw new Error("migu_bad_content_id");
+  const endpoints = [
+    `${base}/MIGUM2.0/v1.0/content/queryById.do?resourceType=2&contentId=${encodeURIComponent(contentId)}`,
+    `${base}/MIGUM2.0/v2.0/content/querySongBySongId.do?contentId=${encodeURIComponent(contentId)}`,
+  ];
+  for (const endpoint of endpoints) {
+    try {
+      const raw = await miguFetchJson(endpoint, timeoutMs);
+      const detail = extractMiguDetail(raw);
+      if (detail) return detail;
+    } catch (_) {}
+  }
+  throw new Error("migu_detail_empty");
+}
+
+function extractMiguPlayUrl(raw) {
+  const roots = [raw?.data, raw?.result, raw?.data?.data, raw].filter(Boolean);
+  for (const x of roots) {
+    const candidates = [x.url, x.listenUrl, x.playUrl, x.audioUrl, x.songUrl, x.listen_url, x.play_url, x.urlInfo?.url, x.resource?.url];
+    for (const u of candidates) if (typeof u === "string" && /^https?:\/\//i.test(u)) return u;
+    const formats = x.rateFormats || x.formatList || x.formats || [];
+    if (Array.isArray(formats)) {
+      const ordered = [...formats].sort((a, b) => ({ SQ: 4, ZQ: 3, HQ: 2, PQ: 1 }[String(b.formatType || b.toneFlag || "").toUpperCase()] || 0) - ({ SQ: 4, ZQ: 3, HQ: 2, PQ: 1 }[String(a.formatType || a.toneFlag || "").toUpperCase()] || 0));
+      for (const f of ordered) if (typeof f?.url === "string" && /^https?:\/\//i.test(f.url)) return f.url;
+    }
+  }
+  return "";
+}
+
+async function fetchMiguPlayableUrl(item, base, timeoutMs = 4200) {
+  if (!item?.copyrightId || !item?.contentId) throw new Error("migu_missing_copyright_id");
+  for (const tone of ["HQ", "PQ"]) {
+    const endpoints = [
+      `${base}/MIGUM2.0/v2.0/content/listen-url?netType=01&toneFlag=${tone}&copyrightId=${encodeURIComponent(item.copyrightId)}&contentId=${encodeURIComponent(item.contentId)}`,
+      `${base}/MIGUM3.0/strategy/pc/listen/v1.0?scene=&netType=01&resourceType=2&copyrightId=${encodeURIComponent(item.copyrightId)}&contentId=${encodeURIComponent(item.contentId)}&toneFlag=${tone}`,
+    ];
+    for (const endpoint of endpoints) {
+      try {
+        const raw = await miguFetchJson(endpoint, timeoutMs);
+        const found = extractMiguPlayUrl(raw);
+        if (found) return found;
+      } catch (_) {}
+    }
+  }
+  throw new Error("migu_no_authorized_stream");
+}
+
+async function raceMigu(song, ids = {}, trace = [], endpoint = MIGU_DEFAULT_BASE, reqMs = 4200, junkWords = DEFAULT_JUNK_WORDS) {
+  const base = String(endpoint || MIGU_DEFAULT_BASE).replace(/\/$/, "");
+  const curated = curatedTrackSourceIds(song);
+  const preferredId = String(ids.migu || curated.migu || "");
+  const candidates = [];
+  if (preferredId && /^\d+$/.test(preferredId)) {
+    try { candidates.push(await fetchMiguDetail(preferredId, base, reqMs)); }
+    catch (e) { trace.push(`migu_detail:${String(e.message || e).replace(/[^a-zA-Z0-9_:-]/g, "_").slice(0, 34)}`); }
+  }
+  // Search metadata can fill fields omitted by the content-detail endpoint.
+  if (!candidates.length || !candidates[0]?.artist || !candidates[0]?.copyrightId) {
+    const found = await searchMiguCandidates(song, base, 1, reqMs);
+    const known = new Set(candidates.map((x) => x.contentId));
+    for (const item of found) if (!known.has(item.contentId)) candidates.push(item);
+  }
+  if (!candidates.length) { trace.push("migu:no_candidates"); throw new Error("migu_no_candidates"); }
+
+  const strict = isStrictSong(song);
+  const seen = new Set();
+  const ranked = candidates.map((c) => ({
+    item: c,
+    score: scoreCandidate(c.title, c.artist, song.title, song.artist, c.duration, song.duration, junkWords, strict, c.album),
+  })).filter((x) => x.score >= (strict ? 80 : 45)).sort((a, b) => b.score - a.score);
+  for (const { item } of ranked) {
+    if (seen.has(item.contentId)) continue;
+    seen.add(item.contentId);
+    let detail = item;
+    try {
+      if (!detail.copyrightId || !detail.artist || !detail.title) {
+        const fetched = await fetchMiguDetail(item.contentId, base, reqMs);
+        detail = { ...item, ...fetched, copyrightId: fetched.copyrightId || item.copyrightId, contentId: fetched.contentId || item.contentId };
+      }
+    } catch (_) {}
+    const finalScore = scoreCandidate(detail.title, detail.artist, song.title, song.artist, detail.duration || item.duration, song.duration, junkWords, strict, detail.album || item.album);
+    if (finalScore < (strict ? 80 : 45)) { trace.push("migu:identity_mismatch"); continue; }
+    if (!detail.copyrightId) { trace.push("migu:no_copyright_id"); continue; }
+    try {
+      const embeddedUrl = extractMiguPlayUrl(detail.raw || item.raw);
+      const rawUrl = embeddedUrl || await fetchMiguPlayableUrl(detail, base, reqMs);
+      // Migu may reject byte-range probes on otherwise playable URLs. A non-strict
+      // probe rejects explicit 30s files while allowing probe-network failures.
+      const url = await verifyNot30sTrial(rawUrl, song.duration, { Referer: "https://music.migu.cn/" }, 44, false);
+      if (!url) { trace.push("migu:audio_rejected"); continue; }
+      trace.push("migu:ok");
+      return { url, source: "migu", miguId: detail.contentId, tier: getSongDifficulty(song, ids), quality: "HQ/PQ" };
+    } catch (e) { trace.push(`migu:${String(e.message || e).replace(/[^a-zA-Z0-9_:-]/g, "_").slice(0, 32)}`); }
+  }
+  throw new Error("migu_no_valid_stream");
+}
+
+async function liveSearchMiguSongs(query, limit = 15, page = 1, junkList = DEFAULT_JUNK_WORDS) {
+  const base = MIGU_DEFAULT_BASE;
+  const list = await searchMiguCandidates({ title: query, artist: "" }, base, page, 3800);
+  return list.slice(0, limit).filter((item) =>
+    !hasBadVariantMeta(item.title, item.artist, item.album) && !isJunkTitle(item.title, query, junkList) &&
+    scoreCandidate(item.title, item.artist, query, "", item.duration, 0, junkList, false, item.album) >= 0
+  ).map((item) => ({
+    id: 0,
+    norm_key: makeNormKey(item.title, item.artist || "未知歌手"),
+    title: item.title,
+    artist: item.artist || "未知歌手",
+    album: item.album || "",
+    cover: httpsCover(item.cover || ""),
+    duration: item.duration || 0,
+    category: "咪咕音乐",
+    source_ids_json: JSON.stringify({ migu: item.contentId }),
+    ext_source: "migu",
+    ext_id: item.contentId,
+  }));
 }
 
 async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.bilibili.com", junkWords = DEFAULT_JUNK_WORDS, reqMs = 4500) {
@@ -992,7 +1298,18 @@ async function fallbackBilibiliAudio(song, ids, trace, biliBase = "https://api.b
 }
 
 async function resolvePlayUrl(song, quality, env, prefer = "", skip = "", forceTier = 0) {
-  const ids = JSON.parse(song.source_ids_json || "{}"), trace = [];
+  const ids = JSON.parse(song.source_ids_json || "{}");
+  // Preserve NetEase IDs on older/imported rows that carry ext_source/ext_id separately.
+  if (!ids.netease && String(song.ext_source || "").toLowerCase() === "netease" && /^\d+$/.test(String(song.ext_id || ""))) {
+    ids.netease = String(song.ext_id);
+  }
+  if (!ids.migu && String(song.ext_source || "").toLowerCase() === "migu" && /^\d+$/.test(String(song.ext_id || ""))) {
+    ids.migu = String(song.ext_id);
+  }
+  const curatedIds = curatedTrackSourceIds(song);
+  for (const [sourceId, sourceValue] of Object.entries(curatedIds)) ids[sourceId] = sourceValue;
+  song = { ...song, source_ids_json: JSON.stringify(ids) };
+  const trace = [];
   const cfg = await getRuntimeCfg(env), srcMap = new Map(cfg.sources.map((s) => [s.id, s]));
   const isEnabled = (id) => { const s = srcMap.get(id); return !s || Number(s.enabled) === 1; };
 
@@ -1008,6 +1325,9 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "", forceT
 
   const tier = getSongDifficulty(song, ids, forceTier);
   const tCfg = TIER_CFG[tier] || TIER_CFG[3];
+  const strictIdCheck = strictIdentity && ids.netease
+    ? validateNeteaseSongId(song, ids.netease)
+    : Promise.resolve(true);
   trace.push(`T${tier}`);
 
   const biliP = (tier >= 3 && isEnabled("bili") && !strictIdentity)
@@ -1015,13 +1335,24 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "", forceT
     : Promise.resolve(null);
 
   const raceList = [];
-  if (prefer === "kuwo") {
+  let miguWasRaced = false;
+  const miguEnabled = !skipSet.has("migu") && isEnabled("migu");
+  if (prefer === "migu") {
+    if (!miguEnabled) throw new Error("migu_disabled");
+    raceList.push(raceMigu(song, ids, trace, srcMap.get("migu")?.endpoint || MIGU_DEFAULT_BASE, Math.min(3500, Math.max(2800, tCfg.reqMs)), cfg.junkWords));
+    miguWasRaced = true;
+  } else if (prefer === "kuwo") {
     raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords, tier));
   } else {
     if (!skipSet.has("kuwo")) raceList.push(raceKuwoAll(song, ids, trace, cfg.junkWords, tier));
-    if (!skipSet.has("gd") && !skipSet.has("gdstudio") && isEnabled("gdstudio")) raceList.push(raceGDStudio(song, ids, trace, srcMap.get("gdstudio")?.endpoint || "https://music-api.gdstudio.xyz/api.php", cfg.junkWords, tCfg.reqMs));
-    if (!skipSet.has("vkeys") && isEnabled("vkeys")) raceList.push(raceVKeys(song, ids, trace, srcMap.get("vkeys")?.endpoint || "https://api.vkeys.cn/v2/music", cfg.junkWords, tier));
+    if (!skipSet.has("gd") && !skipSet.has("gdstudio") && isEnabled("gdstudio")) raceList.push(raceGDStudio(song, ids, trace, srcMap.get("gdstudio")?.endpoint || "https://music-api.gdstudio.xyz/api.php", cfg.junkWords, tCfg.reqMs, strictIdCheck));
+    if (!skipSet.has("vkeys") && isEnabled("vkeys")) raceList.push(raceVKeys(song, ids, trace, srcMap.get("vkeys")?.endpoint || "https://api.vkeys.cn/v2/music", cfg.junkWords, tier, strictIdCheck));
     if (!skipSet.has("kugou")) raceList.push(raceBakaKugou(song, trace, cfg.junkWords, tCfg.reqMs));
+    // Migu joins the parallel race for hard songs / known Migu IDs. For easy songs it is a fallback.
+    if (miguEnabled && (tier >= 4 || ids.migu)) {
+      raceList.push(raceMigu(song, ids, trace, srcMap.get("migu")?.endpoint || MIGU_DEFAULT_BASE, Math.min(3500, Math.max(2800, tCfg.reqMs)), cfg.junkWords));
+      miguWasRaced = true;
+    }
     // 只有 Lv1~Lv2 普通歌曲才带 Meting；Lv3~Lv5 困难歌直接跳过避免 30s 干扰
     if (tier <= 2 && !skipSet.has("meting") && ids.netease) raceList.push(raceMeting("https://api.injahow.cn/meting/", "meting_injahow", ids.netease, song.duration, trace, 2400));
   }
@@ -1031,6 +1362,12 @@ async function resolvePlayUrl(song, quality, env, prefer = "", skip = "", forceT
     return { ...winner, tier, trace };
   } catch (e) {
     if (e?.message === "deadline") trace.push(`deadline_${tCfg.totalMs}ms`);
+    if (!miguWasRaced && miguEnabled) {
+      try {
+        const miguHit = await raceMigu(song, ids, trace, srcMap.get("migu")?.endpoint || MIGU_DEFAULT_BASE, Math.min(3500, Math.max(2800, tCfg.reqMs)), cfg.junkWords);
+        return { ...miguHit, tier, trace };
+      } catch (_) {}
+    }
     const biliHit = await biliP;
     if (biliHit) return { ...biliHit, tier, trace };
     if (tier < 3 && isEnabled("bili") && !strictIdentity) {
@@ -1236,6 +1573,13 @@ export default {
           const src = await env.DB.prepare("SELECT * FROM sources WHERE id = ?").bind((await request.json()).id).first();
           if (!src) return json({ error: "not found" }, 404);
           const t0 = Date.now(); let testUrl = src.endpoint; const hdrs = { "User-Agent": UA, Accept: "application/json" };
+          if (src.type === "migu") {
+            const testTrace = [];
+            try {
+              const hit = await raceMigu({ title: "兰亭序", artist: "周杰伦", duration: 0 }, { migu: "60054702006" }, testTrace, src.endpoint || MIGU_DEFAULT_BASE, 5500);
+              return json({ ok: true, status: hit.source, ms: Date.now() - t0, trace: testTrace });
+            } catch (e) { return json({ ok: false, status: "migu_failed", error: e.message, ms: Date.now() - t0, trace: testTrace }); }
+          }
           if (src.type === "agg") { testUrl = `${src.endpoint}?use_xbridge3=true&types=search&source=kuwo&name=${encodeURIComponent("晴天")}&count=5&pages=1`; hdrs.Referer = "https://music.gdstudio.xyz/"; hdrs.Origin = "https://music.gdstudio.xyz"; }
           else if (src.type === "native") testUrl = `${src.endpoint}/albums`;
           else if (src.type === "vkeys") testUrl = `https://api.vkeys.cn/v2/music/tencent?word=${encodeURIComponent("晴天")}&n=1&quality=3`;
@@ -1254,6 +1598,7 @@ export default {
         if (!isSafeExternalUrl(target)) return json({ error: "invalid stream url" }, 400);
         const fwdHeaders = new Headers({ "User-Agent": UA });
         if (src.includes("kuwo") || target.includes("kuwo")) fwdHeaders.set("Referer", "https://www.kuwo.cn/");
+        else if (src.includes("migu") || target.includes("migu")) { fwdHeaders.set("Referer", "https://music.migu.cn/"); fwdHeaders.set("Origin", "https://music.migu.cn"); }
         else if (src.includes("bili") || target.includes("bilivideo") || target.includes("biliapi") || target.includes("akamaized.net")) fwdHeaders.set("Referer", "https://www.bilibili.com/");
         const range = request.headers.get("Range"); if (range && !isDl) fwdHeaders.set("Range", range);
 
@@ -1290,6 +1635,7 @@ export default {
           ["vkeys_luoyue", raceVKeys(song, { netease: "190449" }, [])],
           ["meting_injahow", raceMeting("https://api.injahow.cn/meting/", "injahow", "190449", 306, [])],
           ["bili_all_v2", (async () => { const t = []; const r = await fallbackBilibiliAudio({ title: "稻香", artist: "周杰伦", duration: 223 }, {}, t); if (!r) throw new Error(t.join(",") || "empty"); return r; })()],
+          ["migu_official", raceMigu({ title: "兰亭序", artist: "周杰伦", duration: 253 }, { migu: "60054702006" }, [], MIGU_DEFAULT_BASE, 5500)],
         ];
         const report = await Promise.all(tests.map(async ([name, p]) => {
           const t0 = Date.now();
@@ -1332,14 +1678,14 @@ export default {
           return json({ artists, hasMore: artists.length >= 20 }, 200, artists.length ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1" });
         });
       }
-    if (path === "/api/artist") {
+      if (path === "/api/artist") {
         const name = (url.searchParams.get("name") || "").trim();
         const requestedId = (url.searchParams.get("id") || "").trim();
         const page = Math.max(1, Number(url.searchParams.get("page") || 1));
         const offsetValue = url.searchParams.get("offset");
         const requestedOffset = offsetValue === null ? (page - 1) * 50 : Math.max(0, Number(offsetValue) || 0);
         if (!name && !requestedId) return json({ songs: [], albums: [], hasMore: false });
-        return withEdgeCache(ctx, `/v14/artist/${encodeURIComponent(requestedId || name)}/${page}/${requestedOffset}`, 600, async (ttl) => {
+        return withEdgeCache(ctx, `/v15/artist/${encodeURIComponent(requestedId || name)}/${page}/${requestedOffset}`, 600, async (ttl) => {
           const cfg = await getRuntimeCfg(env);
           if (page === 1) {
             let localRows = [];
@@ -1348,25 +1694,53 @@ export default {
             const official = await fetchOfficialArtistData(name, /^\d+$/.test(requestedId) ? requestedId : "", cfg.junkWords);
             const mergedSongs = [...localRows];
             for (const song of official.songs) if (!seen.has(song.norm_key)) { seen.add(song.norm_key); mergedSongs.push(song); }
+
             let searchFallbackCount = 0;
             if ((!official.artistId || mergedSongs.length < 30) && name) {
               const live = await liveSearchSongs(name, 50, 1, cfg.junkWords, 0).catch(() => []);
               searchFallbackCount = live.length;
               for (const song of live) if (!seen.has(song.norm_key) && artistIdentityMatches(song.artist, name)) { seen.add(song.norm_key); mergedSongs.push(song); }
             }
+
+            let gdFallbackCount = 0;
+            if (name && (!official.artistId || mergedSongs.length < 15)) {
+              const gdLive = await liveSearchGdSongs(name, 30, 1, cfg.junkWords).catch(() => []);
+              gdFallbackCount = gdLive.length;
+              for (const song of gdLive) if (artistIdentityMatches(song.artist, name) && !seen.has(song.norm_key)) { seen.add(song.norm_key); mergedSongs.push(song); }
+            }
+
             let albums = official.albums;
             if (name && albums.length < 5) {
               const liveAlbums = await liveSearchAlbums(name, 20, 1).catch(() => []);
               const albumSeen = new Set(albums.map((album) => String(album.id)));
               for (const album of liveAlbums) if (!albumSeen.has(String(album.id))) { albumSeen.add(String(album.id)); albums.push(album); }
             }
-            // When an official artist ID is known, page two starts at the end of
-            // the official hot-song batch. If it is unavailable, the local count
-            // is used as a safe search-offset fallback (rather than skipping 50).
-            const nextOffset = official.artistId ? official.songs.length : (searchFallbackCount || localRows.length);
-            const hasMore = Boolean(official.artistId) || searchFallbackCount >= 50 || mergedSongs.length >= 50;
+
+            // Album search can still reveal the artist ID when NetEase's artist search is rate-limited.
+            let pagingArtistId = String(official.artistId || (/^\d+$/.test(requestedId) ? requestedId : ""));
+            if (!pagingArtistId && name) {
+              const matchedAlbum = albums.find((album) => /^\d+$/.test(String(album.artistId || "")) && artistIdentityMatches(album.artist, name));
+              if (matchedAlbum) pagingArtistId = String(matchedAlbum.artistId);
+            }
+            // Always try the canonical artist-songs endpoint for page 1, even when
+            // the artist ID was resolved but the artist-detail endpoint returned no hotSongs.
+            const initialArtistPage = pagingArtistId
+              ? await fetchNeteaseArtistSongsPage(pagingArtistId, 0, 50, name).catch(() => null)
+              : null;
+            if (initialArtistPage?.ok) {
+              for (const song of initialArtistPage.songs || []) if (!seen.has(song.norm_key)) { seen.add(song.norm_key); mergedSongs.push(song); }
+            }
+
+            // If artist-ID lookup is unavailable, keep a retryable load-more action.
+            // Search offset must be based on the search result count, never local D1 rows.
+            const nextOffset = pagingArtistId
+              ? Number(initialArtistPage?.nextOffset ?? official.songs.length)
+              : searchFallbackCount;
+            const hasMore = pagingArtistId
+              ? Boolean(initialArtistPage?.ok ? initialArtistPage.hasMore : mergedSongs.length > 0)
+              : Boolean(searchFallbackCount >= 50 || gdFallbackCount >= 30 || mergedSongs.length > 0);
             const okCache = albums.length > 0 && mergedSongs.length >= 15;
-            return json({ artist: name || official.artistName, artistId: official.artistId || requestedId, page, nextOffset, hasMore, songs: mergedSongs, albums }, 200,
+            return json({ artist: name || official.artistName, artistId: pagingArtistId, page, nextOffset, hasMore, songs: mergedSongs, albums }, 200,
               okCache ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1", "Cache-Control": "no-store" });
           }
 
@@ -1374,9 +1748,23 @@ export default {
           if (!artistId && name) artistId = (await resolveNeteaseArtistId(name)).id;
           let pageData = artistId ? await fetchNeteaseArtistSongsPage(artistId, requestedOffset, 50, name) : { songs: [], hasMore: false, nextOffset: requestedOffset, rawCount: 0, ok: false };
           if (!pageData.ok || !pageData.songs.length) {
-            const live = await liveSearchSongs(name, 50, page, cfg.junkWords, requestedOffset).catch(() => []);
-            const filtered = live.filter((song) => artistIdentityMatches(song.artist, name));
-            pageData = { songs: filtered, hasMore: live.length >= 50, nextOffset: requestedOffset + live.length, rawCount: live.length, ok: true };
+            const [live, gdLive] = await Promise.all([
+              liveSearchSongs(name, 50, page, cfg.junkWords, requestedOffset).catch(() => []),
+              liveSearchGdSongs(name, 30, page, cfg.junkWords).catch(() => []),
+            ]);
+            const batch = [], batchSeen = new Set();
+            for (const song of [...live, ...gdLive]) {
+              if (!song || !artistIdentityMatches(song.artist, name) || batchSeen.has(song.norm_key)) continue;
+              batchSeen.add(song.norm_key);
+              batch.push(song);
+            }
+            pageData = {
+              songs: batch,
+              hasMore: live.length >= 50 || gdLive.length >= 30,
+              nextOffset: requestedOffset + live.length,
+              rawCount: live.length + gdLive.length,
+              ok: true,
+            };
           }
           const songs = pageData.songs || [];
           const hasMore = Boolean(pageData.hasMore && songs.length);
@@ -1444,7 +1832,7 @@ export default {
       if (path === "/api/search") {
         const q = (url.searchParams.get("q") || "").trim(), page = Math.max(1, Number(url.searchParams.get("page") || 1));
         if (!q) return json({ songs: [] });
-        return withEdgeCache(ctx, `/v13/search/${encodeURIComponent(q)}/${page}`, 300, async (ttl) => {
+        return withEdgeCache(ctx, `/v14/search/${encodeURIComponent(q)}/${page}`, 300, async (ttl) => {
           const cfg = await getRuntimeCfg(env); let localRows = [];
           if (page === 1) {
             const tokens = q.split(/\s+/).map((t) => t.replace(/"/g, "").trim()).filter(Boolean);
@@ -1456,15 +1844,18 @@ export default {
           }
           const merged = [...localRows], seen = new Set(merged.map((r) => r.norm_key));
           const needGdFallback = merged.length < 8;
-          const [live, gdLive] = await Promise.all([
+          const needMiguFallback = merged.length < 8;
+          const [live, gdLive, miguLive] = await Promise.all([
             liveSearchSongs(q, 40, page, cfg.junkWords),
             needGdFallback ? liveSearchGdSongs(q, 30, page, cfg.junkWords) : Promise.resolve([]),
+            needMiguFallback ? liveSearchMiguSongs(q, 15, page, cfg.junkWords).catch(() => []) : Promise.resolve([]),
           ]);
           for (const item of live) if (!seen.has(item.norm_key)) { seen.add(item.norm_key); merged.push(item); }
-          // GD Studio source is queried provider-by-provider; one failed provider cannot erase another's hits.
+          // GD Studio is queried provider-by-provider; Migu is an independent fallback.
           for (const item of gdLive) if (!seen.has(item.norm_key)) { seen.add(item.norm_key); merged.push(item); }
+          for (const item of miguLive) if (!seen.has(item.norm_key)) { seen.add(item.norm_key); merged.push(item); }
           const headers = merged.length ? { "Cache-Control": `public, max-age=${ttl}` } : { "X-Skip-Cache": "1", "Cache-Control": "no-store" };
-          return json({ page, hasMore: live.length >= 30 || merged.length >= 30, songs: merged }, 200, headers);
+          return json({ page, hasMore: live.length >= 30 || gdLive.length >= 30 || miguLive.length >= 15 || merged.length >= 30, songs: merged }, 200, headers);
         });
       }
       if (path === "/api/song") {
@@ -1486,6 +1877,8 @@ export default {
       if (path === "/api/play") {
         const rawId = url.searchParams.get("id") || ""; let id = /^\d+$/.test(rawId) ? Number(rawId) : 0;
         const quality = url.searchParams.get("q") || "high", prefer = url.searchParams.get("prefer") || "", skip = url.searchParams.get("skip") || "", force = url.searchParams.get("force") === "1";
+        const incomingSource = (url.searchParams.get("ext_source") || "").trim().toLowerCase();
+        const incomingExtId = (url.searchParams.get("ext_id") || "").trim();
         let song = id > 0 ? await env.DB.prepare("SELECT * FROM songs WHERE id = ?").bind(id).first() : null;
         if (!song && id === 0) {
           const title = (url.searchParams.get("title") || "").trim(), artist = (url.searchParams.get("artist") || "").trim();
@@ -1493,15 +1886,30 @@ export default {
           const nk = makeNormKey(title, artist);
           song = await env.DB.prepare("SELECT * FROM songs WHERE norm_key = ?").bind(nk).first();
           if (!song) {
-            const es = url.searchParams.get("ext_source") || "", eid = url.searchParams.get("ext_id") || "";
-            await env.DB.prepare("INSERT INTO songs (norm_key,title,artist,album,cover,duration,category,tags,score,source_ids_json,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(norm_key) DO NOTHING").bind(nk, title, artist || "未知歌手", url.searchParams.get("album") || "", url.searchParams.get("cover") || "", Number(url.searchParams.get("duration") || 0), "点播收藏", "", 300, JSON.stringify(es && eid ? { [es]: eid } : {}), Math.floor(Date.now() / 1000)).run();
+            await env.DB.prepare("INSERT INTO songs (norm_key,title,artist,album,cover,duration,category,tags,score,source_ids_json,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(norm_key) DO NOTHING").bind(nk, title, artist || "未知歌手", url.searchParams.get("album") || "", url.searchParams.get("cover") || "", Number(url.searchParams.get("duration") || 0), "点播收藏", "", 300, JSON.stringify(incomingSource && incomingExtId ? { [incomingSource]: incomingExtId } : {}), Math.floor(Date.now() / 1000)).run();
             song = await env.DB.prepare("SELECT * FROM songs WHERE norm_key = ?").bind(nk).first();
           }
           if (song) id = song.id;
         }
         if (!song) return json({ error: "not found" }, 404);
+        // A live NetEase artist/search result may carry a fresher ID than an older
+        // D1 row with the same norm_key. Merge that ID before resolving playback.
+        const storedIds = JSON.parse(song.source_ids_json || "{}");
+        let idsChanged = false;
+        if (["netease", "migu"].includes(incomingSource) && /^\d+$/.test(incomingExtId) && String(storedIds[incomingSource] || "") !== incomingExtId) {
+          storedIds[incomingSource] = incomingExtId;
+          idsChanged = true;
+        }
+        const curatedIds = curatedTrackSourceIds(song);
+        for (const [sourceId, sourceValue] of Object.entries(curatedIds)) {
+          if (String(storedIds[sourceId] || "") !== String(sourceValue)) { storedIds[sourceId] = sourceValue; idsChanged = true; }
+        }
+        if (idsChanged) {
+          song.source_ids_json = JSON.stringify(storedIds);
+          ctx.waitUntil(env.DB.prepare("UPDATE songs SET source_ids_json = ? WHERE id = ?").bind(song.source_ids_json, id).run());
+        }
 
-        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v11/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
+        const cache = caches.default, cacheKey = new Request(`https://cache.internal/v13/play/${id}/${quality}/${prefer || "auto"}/${skip || "none"}`);
         let resolved = null;
         if (!force) { const cached = await cache.match(cacheKey); if (cached) resolved = await cached.json().catch(() => null); }
         if (force && skip.includes("kuwo")) {
@@ -1511,10 +1919,11 @@ export default {
         if (!resolved) {
           resolved = await resolvePlayUrl(song, quality, env, prefer, skip);
           if (resolved.error) return json(resolved, 502);
-          if (resolved.kuwoId || resolved.biliId) {
+          if (resolved.kuwoId || resolved.biliId || resolved.miguId) {
             const ids = JSON.parse(song.source_ids_json || "{}"); let changed = false;
             if (resolved.kuwoId && !ids.kuwo) { ids.kuwo = resolved.kuwoId; changed = true; }
             if (resolved.biliId && !ids.bili) { ids.bili = resolved.biliId; changed = true; }
+            if (resolved.miguId && String(ids.migu || "") !== String(resolved.miguId)) { ids.migu = String(resolved.miguId); changed = true; }
             if (changed) ctx.waitUntil(env.DB.prepare("UPDATE songs SET source_ids_json = ? WHERE id = ?").bind(JSON.stringify(ids), id).run());
           }
           ctx.waitUntil(cache.put(cacheKey, new Response(JSON.stringify(resolved), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=900" } })));
@@ -1575,7 +1984,7 @@ function raceFirst(tasks) {
 module.exports = {
   platform: "MusicHub·自建云端",
   author: "MusicHub",
-  version: "3.2.0",
+  version: "3.3.0",
   srcUrl: SRC_URL,
   cacheControl: "no-cache",
   supportedSearchType: ["music", "album", "artist", "sheet"],
@@ -2042,7 +2451,7 @@ send(EVENT_NAMES.inited, {
       if (path === "/musicfree.json") {
         const cfg = await getRuntimeCfg(env);
         const plugins = [
-          { name: "MusicHub·自建云端", url: `${origin}/s/${tkSeg}/music-hub.js`, version: "3.2.0" },
+          { name: "MusicHub·自建云端", url: `${origin}/s/${tkSeg}/music-hub.js`, version: "3.3.0" },
           { name: "MusicHub·酷我直连", url: `${origin}/s/${tkSeg}/kuwo.js`, version: "1.1.0" },
           { name: "MusicHub·B站直连", url: `${origin}/s/${tkSeg}/bili.js`, version: "1.3.0" },
           { name: "MusicHub·塞壬直连", url: `${origin}/s/${tkSeg}/msr.js`, version: "1.1.0" },
