@@ -405,9 +405,10 @@ var DEFAULT_RADIOS = [
   { id: "acg", title: "二次元 · 游戏原声", desc: "ACG 主题曲与塞壬唱片官方无损库", icon: "🎧", grad: "linear-gradient(135deg,#2563eb,#06b6d4)" },
   { id: "drive", title: "公路驾驶 · 燃曲电音", desc: "摇滚、节奏电音，提神醒脑", icon: "🚗", grad: "linear-gradient(135deg,#dc2626,#f97316)" }
 ];
-var JUNK_W = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x", "翻唱", "cover", "吉他版", "钢琴版", "弹唱", "翻奏"];
-var HARD_ARTIST_W = ["周杰伦", "jay chou", "林俊杰", "陈奕迅", "邓紫棋", "薛之谦", "陶喆", "王力宏"];
-var HARD_TRACK_W = ["七里香", "一路向北", "晴天", "稻香", "夜曲", "以父之名", "青花瓷", "江南", "修炼爱情", "十年", "富士山下", "k歌之王"];
+var JUNK_W = ["dj版", "dj舞曲", "伴奏", "喊麦", "铃声", "广场舞", "卡拉ok", "消音版", "片段", "高潮版", "0.8x", "1.2x"];
+var HARD_ARTIST_W = ["周杰伦", "jay chou", "林俊杰", "陈奕迅", "taylor swift", "五月天", "邓紫棋", "薛之谦", "陶喆", "王力宏"];
+var HARD_TRACK_W = ["七里香", "一路向北", "晴天", "稻香", "夜曲", "以父之名", "青花瓷", "可惜没如果", "江南", "修炼爱情", "十年", "富士山下", "k歌之王"];
+var SOFT_W = ["live", "现场", "演唱会", "翻唱", "cover", "吉他版", "钢琴版", "纯享", "加速", "降调"];
 
 // -------- 调试窗口引擎 --------
 function isDebugActive() { return Boolean(serverDebugEnabled || urlDbgFlag || dbgWinOpen); }
@@ -417,7 +418,7 @@ function syncDbgBtn() {
   btn.style.display = ((serverDebugEnabled && !hiddenLocally) || urlDbgFlag || dbgWinOpen) ? "inline-flex" : "none";
 }
 function sanitizeDbgText(str) {
-  return String(str || "").replace(/([?&](?:token|stoken|atoken)=)[^&\s]+/gi, "$1***");
+  return String(str || "").replace(/([?&](?:token|stoken|atoken)=)[^&\\s]+/gi, "$1***");
 }
 function dbgTime() {
   var d = new Date();
@@ -524,23 +525,26 @@ async function runSubSelfCheck() {
 }
 
 function isStrictSongLocal(s) {
-  var a = String(s && s.artist || "").toLowerCase(), t = String(s && s.title || "").toLowerCase();
+  var a = decodeHtmlLocal(s && s.artist || "").toLowerCase(), t = decodeHtmlLocal(s && s.title || "").toLowerCase();
   return HARD_ARTIST_W.some(function(x){ return a.indexOf(x.toLowerCase()) >= 0; }) || HARD_TRACK_W.some(function(x){ return t.indexOf(x.toLowerCase()) >= 0; });
 }
 function badVariantLocal(name, artist, album) {
-  return /(纯音乐|纯钢琴|instrumental|钢琴曲|钢琴演奏|演奏版|器乐版|背景音乐|轻音乐|伴奏版|卡拉.?ok|翻唱|cover|吉他版|弹唱|翻奏|dj版)/i.test([name, artist, album].join(" "));
+  return /(纯音乐|纯钢琴|instrumental|钢琴曲|钢琴演奏|演奏版|器乐版|背景音乐|轻音乐|伴奏版|卡拉.?ok|翻唱|cover|吉他版|弹唱|翻奏|dj版)/i.test(decodeHtmlLocal([name, Array.isArray(artist) ? artist.join(" ") : artist, album].join(" ")));
 }
 function artistMatchesLocal(candidate, expected) {
-  var c = normStrLocal(Array.isArray(candidate) ? candidate.join(" ") : candidate), e = normStrLocal(String(expected || "").split(/[/,、]|\\s+&\\s+/)[0]);
+  var c = normStrLocal(decodeHtmlLocal(Array.isArray(candidate) ? candidate.join(" ") : candidate));
+  var e = normStrLocal(decodeHtmlLocal(String(expected || "").split(/[/,、]|\\s+&\\s+/)[0]));
   if (!e) return true;
   if (!c) return false;
   if (c.indexOf(e) >= 0 || e.indexOf(c) >= 0) return true;
   var groups = [["周杰伦","jay chou","周董"],["林俊杰","jj lin","jj"],["陈奕迅","eason chan"],["邓紫棋","g.e.m.","gem"],["薛之谦","joker xue"],["陶喆","david tao"],["王力宏","wang leehom","leehom wang"],["张国荣","leslie cheung"],["张学友","jacky cheung"],["王菲","faye wong"]];
   return groups.some(function(g){ return g.some(function(a){return e.indexOf(normStrLocal(a))>=0;}) && g.some(function(a){return c.indexOf(normStrLocal(a))>=0;}); });
 }
-var SOFT_W = ["live", "现场", "演唱会", "翻唱", "cover", "吉他版", "钢琴版", "纯享", "加速", "降调"];
 
 function esc(s) { return String(s || "").replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+function decodeHtmlLocal(s) {
+  return String(s || "").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"');
+}
 function fmt(s) { var m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ":" + (r < 10 ? "0" : "") + r; }
 function thumb(u, sz) {
   if (!u) return DEFAULT_COV;
@@ -548,32 +552,43 @@ function thumb(u, sz) {
   if (u.indexOf("music.126.net") >= 0 && u.indexOf("?") < 0) return u + "?param=" + (sz || 220) + "y" + (sz || 220);
   return u;
 }
-var TRAD_SIMP_S = "啞哑謙谦傑杰倫伦陳陈張张劉刘楊杨趙赵黃黄吳吴鄭郑孫孙馬马羅罗葉叶蘇苏蔣蒋韓韩馮冯鄧邓蕭萧謝谢許许盧卢韋韦莊庄嚴严鍾钟麥麦歐欧陽阳溫温藍蓝齊齐學学榮荣麗丽龍龙遙遥輝辉闊阔問问戀恋蘭兰煉炼單单愛爱說说聽听後后來来這这為为們们無无樂乐夢梦風风飛飞開开關关門门長长時时見见還还過过對对錯错點点線线書书寫写語语話话詞词調调聲声響响誰谁麼么裡里邊边頭头臉脸淚泪傷伤獨独演員员國国華华東东萬万億亿雙双與与給给讓让願愿會会該该經经總总結结終终離离別别記记憶忆懷怀變变動动靜静歡欢難难實实虛虚輕轻遠远舊旧歲岁晝昼顏颜紅红綠绿銀银鐵铁銅铜鋼钢網网雲云電电";
+var TRAD_SIMP_LIST = [
+  "啞哑","謙谦","傑杰","倫伦","陳陈","張张","劉刘","楊杨","趙赵","黃黄","吳吴","鄭郑","孫孙","馬马","羅罗",
+  "葉叶","蘇苏","蔣蒋","韓韩","馮冯","鄧邓","蕭萧","謝谢","許许","盧卢","韋韦","莊庄","嚴严","鍾钟","麥麦",
+  "歐欧","陽阳","溫温","藍蓝","齊齐","學学","榮荣","麗丽","龍龙","遙遥","輝辉","闊阔","問问","戀恋","蘭兰",
+  "煉炼","單单","愛爱","說说","聽听","後后","來来","這这","為为","們们","無无","樂乐","夢梦","風风","飛飞",
+  "開开","關关","門门","長长","時时","見见","還还","過过","對对","錯错","點点","線线","書书","寫写","語语",
+  "話话","詞词","調调","聲声","響响","誰谁","麼么","裡里","邊边","頭头","臉脸","淚泪","傷伤","獨独","員员",
+  "國国","華华","東东","萬万","億亿","雙双","與与","給给","讓让","願愿","會会","該该","經经","總总","結结",
+  "終终","離离","別别","記记","憶忆","懷怀","變变","動动","靜静","歡欢","難难","實实","虛虚","輕轻","遠远",
+  "舊旧","歲岁","晝昼","顏颜","紅红","綠绿","銀银","鐵铁","銅铜","鋼钢","網网","雲云","電电"
+];
+var TRAD_SIMP_MAP_LOCAL = {};
+for (var _ti = 0; _ti < TRAD_SIMP_LIST.length; _ti++) {
+  TRAD_SIMP_MAP_LOCAL[TRAD_SIMP_LIST[_ti].charAt(0)] = TRAD_SIMP_LIST[_ti].charAt(1);
+}
 function toSimpLocal(s) {
-  var m = {}, i;
-  for (i = 0; i + 1 < TRAD_SIMP_S.length; i += 2) m[TRAD_SIMP_S.charAt(i)] = TRAD_SIMP_S.charAt(i + 1);
   var out = "", str = String(s || "");
-  for (i = 0; i < str.length; i++) { var c = str.charAt(i); out += m[c] || c; }
+  for (var i = 0; i < str.length; i++) { var c = str.charAt(i); out += TRAD_SIMP_MAP_LOCAL[c] || c; }
   return out;
 }
 function normStrLocal(s) {
-  return toSimpLocal(s).toLowerCase().split("(")[0].split("（")[0].split("[")[0].split("【")[0].replace(/\\s+/g, " ").trim();
+  var raw = toSimpLocal(String(s || "")).toLowerCase().trim();
+  var stripped = raw.replace(/[\\(（\\[【].*?[\\)）\\]】]/g, "").replace(/\\s+/g, " ").trim();
+  return stripped || raw.replace(/[\\(\\)\\[\\]（）【】]/g, "").replace(/\\s+/g, " ").trim();
 }
 function scoreMatchLocal(cName, cArtist, oTitle, oArtist, cDur, oDur, cAlbum, strict) {
-  var raw = String(cName || "").toLowerCase(), ro = String(oTitle || "").toLowerCase();
+  var raw = toSimpLocal(decodeHtmlLocal(cName)).toLowerCase(), ro = toSimpLocal(decodeHtmlLocal(oTitle)).toLowerCase();
   if (!raw || badVariantLocal(cName, cArtist, cAlbum)) return -999;
   for (var i = 0; i < JUNK_W.length; i++) if (raw.indexOf(JUNK_W[i]) >= 0 && ro.indexOf(JUNK_W[i]) < 0) return -999;
   var d = Number(cDur || 0), od = Number(oDur || 0);
   if (od >= 90 && d > 0 && (d <= 65 || d < od * 0.72)) return -999;
   if (strict && oArtist && !artistMatchesLocal(cArtist, oArtist)) return -999;
-  var sc = 0, t = normStrLocal(cName), ot = normStrLocal(oTitle);
+  var sc = 0, t = normStrLocal(raw), ot = normStrLocal(ro);
   sc += (t === ot) ? 55 : ((t.indexOf(ot) >= 0 || ot.indexOf(t) >= 0) ? 20 : -45);
-  var oa = normStrLocal(String(oArtist || "").split(/[/,、]|\\s+&\\s+/)[0]), ca = normStrLocal(Array.isArray(cArtist) ? cArtist.join(" ") : cArtist);
-  if (oa && oa !== "未知歌手") {
-    if (ca && (ca.indexOf(oa) >= 0 || oa.indexOf(ca) >= 0)) sc += 65;
-    else if (ca) sc -= 160;
-    else sc -= 18;
-  }
+  var oaList = decodeHtmlLocal(oArtist).split(/[/,、]|\\s+&\\s+/).map(normStrLocal).filter(function(x) { return x && x !== "未知歌手"; });
+  var ca = normStrLocal(decodeHtmlLocal(Array.isArray(cArtist) ? cArtist.join(" ") : cArtist));
+  if (oaList.length && ca) sc += oaList.some(function(a) { return ca.indexOf(a) >= 0 || a.indexOf(ca) >= 0; }) ? 65 : -120;
   for (var j = 0; j < SOFT_W.length; j++) if (raw.indexOf(SOFT_W[j]) >= 0 && ro.indexOf(SOFT_W[j]) < 0) sc -= 45;
   if (od > 30 && d > 0) {
     var diff = Math.abs(d - od);
@@ -602,6 +617,7 @@ function toggleTheme() {
   toast(next === "light" ? "已切换为浅色主题" : "已切换为深色主题");
 }
 syncThemeBtn();
+
 // -------- 下载管理器 --------
 var hasFsApi = typeof window.showDirectoryPicker === "function";
 var cachedDirHandle = null;
@@ -1065,7 +1081,7 @@ function loadMore() {
 // -------- 自建歌单 + 导入 + 跨软件分享 --------
 function saveSheets() { localStorage.setItem("mh_playlists_v1", JSON.stringify(mySheets)); }
 function makeNormKeyLocal(title, artist) {
-  var raw = String(title || "").toLowerCase().trim(), variant = "";
+  var raw = toSimpLocal(String(title || "")).toLowerCase().trim(), variant = "";
   var m = raw.match(/[\\(（\\[【]([^\\)）\\]】]+)[\\)）\\]】]/g);
   if (m) {
     for (var i = 0; i < m.length; i++) {
@@ -1074,7 +1090,7 @@ function makeNormKeyLocal(title, artist) {
       }
     }
   }
-  var base = normStrLocal(raw) || raw.replace(/[\\(\\)\\[\\]（）【】]/g, "").replace(/\\s+/g, " ").trim();
+  var base = normStrLocal(raw);
   var tKey = (base + (variant ? " " + variant.trim() : "")).replace(/\\s+/g, " ").trim();
   var aKey = normStrLocal(String(artist || "").split(/[/,、]|\\s+&\\s+/)[0]);
   return tKey + "|" + aKey;
@@ -1287,6 +1303,15 @@ function pickCandidate(i, manual) {
   }
 }
 
+function parseIvLocal(str) {
+  var s = String(str || "");
+  if (!s) return 0;
+  var m = s.match(/(?:(\\d+)\\s*分)?\\s*(\\d+)\\s*秒/);
+  if (m) return Number(m[1] || 0) * 60 + Number(m[2] || 0);
+  var p = s.split(":").map(Number);
+  return p.length === 2 ? p[0] * 60 + p[1] : 0;
+}
+
 function fetchDirectGD(s, plat, label, seq) {
   var cleanArtist = (s.artist || "").split(/[/,、]|\\s+&\\s+/)[0].trim();
   var kw = (normStrLocal(s.title) + " " + cleanArtist).trim();
@@ -1299,7 +1324,7 @@ function fetchDirectGD(s, plat, label, seq) {
     return fetch(url, controller ? { signal: controller.signal } : {}).finally(function(){ if (timer) clearTimeout(timer); });
   }
   var strictIdentity = isStrictSongLocal(s);
-  var p = (plat === "netease" && s.ext_source === "netease" && s.ext_id)
+  var p = (!strictIdentity && plat === "netease" && s.ext_source === "netease" && s.ext_id)
     ? Promise.resolve(s.ext_id)
     : directFetch(searchUrl)
         .then(function(r) { if (!r.ok) throw new Error("搜索 HTTP " + r.status); if (!(r.headers.get("content-type") || "").toLowerCase().includes("json")) throw new Error("搜索非JSON响应"); return r.json(); })
@@ -1321,7 +1346,7 @@ function fetchDirectGD(s, plat, label, seq) {
       .then(function(r) { if (!r.ok) throw new Error("取链 HTTP " + r.status); if (!(r.headers.get("content-type") || "").toLowerCase().includes("json")) throw new Error("取链非JSON响应"); return r.json(); })
       .then(function(d) {
         if (seq !== playSeq) return;
-        if (!d || !d.url) throw new Error("返回空 URL");
+        if (!d || !d.url || d.url.indexOf("panspace.kuwo.cn") >= 0 || d.url.indexOf("/404") >= 0) throw new Error("无效播放 URL");
         if (d.size && s.duration >= 90 && Number(d.size) < Math.max(320, s.duration * 2.8)) throw new Error("体积过小(" + d.size + "KB)");
         if (isDebugActive()) dbgLogPlay("ok", "直连:" + label, "命中 " + (d.br || "?") + "k (" + (Date.now() - t0) + "ms)", uUrl + "\\n-> " + d.url);
         addCandidate(seq, { label: label + (d.br ? "(" + d.br + "k)" : ""), url: d.url, rawSrc: plat, isTrial: false });
@@ -1337,7 +1362,8 @@ function fetchDirectGD(s, plat, label, seq) {
 function fetchDirectVKeys(s, seq) {
   var cleanArtist = (s.artist || "").split(/[/,、]|\\s+&\\s+/)[0].trim();
   var kw = (normStrLocal(s.title) + " " + cleanArtist).trim();
-  var timeoutMs = isStrictSongLocal(s) ? 6800 : 4200;
+  var strict = isStrictSongLocal(s);
+  var timeoutMs = strict ? 6800 : 4200;
   ["https://api.vkeys.cn/v2/music", "https://luoyue-api-cf.vincentzyu233.cn/v2/music"].forEach(function(base, idx) {
     var tag = idx === 0 ? "QQ(直连)" : "落月(直连)", t0 = Date.now();
     var reqUrl = base + "/tencent?word=" + encodeURIComponent(kw) + "&n=1&quality=3";
@@ -1349,9 +1375,13 @@ function fetchDirectVKeys(s, seq) {
       .then(function(res) {
         if (seq !== playSeq) return;
         var d = res && res.data;
-        if (!d || !d.url || d.ekey) throw new Error(d && d.ekey ? "含ekey加密" : "无播放URL");
-        var sc = scoreMatchLocal(d.song || s.title, d.singer || s.artist, s.title, s.artist, 0, s.duration);
-        if (sc < 15) throw new Error("候选不匹配(score=" + sc + ")");
+        if (!d || !d.url || d.ekey || d.url.indexOf("panspace.kuwo.cn") >= 0 || d.url.indexOf("/404") >= 0) throw new Error(d && d.ekey ? "含ekey加密" : "无播放URL");
+        var vkDur = parseIvLocal(d.interval);
+        if (s.duration >= 90 && vkDur > 0 && (vkDur <= 65 || vkDur < s.duration * 0.72)) throw new Error("试听/短版拦截(" + vkDur + "s)");
+        var cTitle = strict ? String(d.song || "") : (d.song || s.title);
+        var cArtist = strict ? String(d.singer || "") : (d.singer || s.artist);
+        var sc = scoreMatchLocal(cTitle, cArtist, s.title, s.artist, vkDur, s.duration, d.album || "", strict);
+        if (sc < (strict ? 80 : 15)) throw new Error("候选不匹配(score=" + sc + ")");
         if (isDebugActive()) dbgLogPlay("ok", "直连:" + tag, "命中 (" + (Date.now() - t0) + "ms)", reqUrl + "\\n-> " + d.url);
         addCandidate(seq, { label: tag, url: d.url, rawSrc: "qq", isTrial: false });
       }).catch(function(err) {
@@ -1507,6 +1537,15 @@ audio.addEventListener("error", function() {
   }
 });
 
+function mapCloudSkipId(cloudSource) {
+  var head = String(cloudSource || "").split(":")[0];
+  if (head === "gd") return "gdstudio";
+  if (head === "luoyue") return "vkeys";
+  if (head === "baka") return "kugou";
+  if (head.indexOf("meting") === 0) return "meting";
+  return head;
+}
+
 audio.addEventListener("loadedmetadata", function() {
   var c = candidates[curCandIdx];
   var isShort = curSong && curSong.duration >= 90 && audio.duration > 0 && (audio.duration <= 65 || audio.duration < curSong.duration * 0.72);
@@ -1521,8 +1560,8 @@ audio.addEventListener("loadedmetadata", function() {
     for (var i = 0; i < candidates.length; i++) { if (!candidates[i].isTrial) { pickCandidate(i, false); return; } }
     if (!cloudStarted) { fetchCloudPlay(curSong, playSeq, true, "本地候选均为试听/短版"); return; }
     if (c.cloudSource && cloudRetries < 2) {
-      var srcTag = c.cloudSource.split(":")[0].replace("meting_injahow", "meting");
-      if (cloudSkips.indexOf(srcTag) < 0) cloudSkips.push(srcTag);
+      var srcTag = mapCloudSkipId(c.cloudSource);
+      if (srcTag && cloudSkips.indexOf(srcTag) < 0) cloudSkips.push(srcTag);
       cloudRetries++; cloudDone = false; cloudStarted = false;
       document.getElementById("dArtist").textContent = curSong.artist + " · 跳过短版，自动匹配完整源...";
       fetchCloudPlay(curSong, playSeq, true, "云端返回短版，跳过 " + srcTag + " 重试");
@@ -1596,8 +1635,9 @@ var lrcEl = document.getElementById("lrcBox");
 ["wheel", "touchstart"].forEach(function(ev) { lrcEl.addEventListener(ev, function() { userLrcScrollUntil = Date.now() + 3500; }, { passive: true }); });
 function parseLrc(raw, transRaw) {
   lrcRows = []; var transMap = {};
-  (transRaw || "").split(/\\r?\\n/).forEach(function(line) { var m = line.match(/\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)/); if (m) transMap[Math.round((Number(m[1]) * 60 + Number(m[2])) * 10)] = m[3].trim(); });
-  (raw || "").split(/\\r?\\n/).forEach(function(line) { var m = line.match(/\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)/); if (m) { var t = Number(m[1]) * 60 + Number(m[2]), txt = m[3].trim(); if (txt) lrcRows.push({ t: t, txt: txt, tr: transMap[Math.round(t * 10)] || "" }); } });
+  var normClock = function(s) { return String(s || "").replace(/^\\uFEFF/, "").replace(/\\[(\\d{1,3}:\\d{2}):(\\d{1,3})\\]/g, "[$1.$2]"); };
+  normClock(transRaw).split(/\\r?\\n/).forEach(function(line) { var m = line.match(/\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)/); if (m) transMap[Math.round((Number(m[1]) * 60 + Number(m[2])) * 10)] = m[3].trim(); });
+  normClock(raw).split(/\\r?\\n/).forEach(function(line) { var m = line.match(/\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)/); if (m) { var t = Number(m[1]) * 60 + Number(m[2]), txt = m[3].trim(); if (txt) lrcRows.push({ t: t, txt: txt, tr: transMap[Math.round(t * 10)] || "" }); } });
   lrcEl.scrollTop = 0;
   if (!lrcRows.length) {
     var plainLines = String(raw || "").split(/\\r?\\n/).map(function(x) { return x.trim(); }).filter(Boolean);
@@ -1660,4 +1700,4 @@ if (initShare) loadSharedPlaylist(initShare);
 else nav("discover");
 </script>
 </body>
-</html>`;
+</html>`
